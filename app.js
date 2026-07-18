@@ -1183,6 +1183,42 @@ function renderRecent() {
   });
 }
 
+// ── Pasted images (compressed client-side, stored via /api/img) ───────────────
+async function uploadPastedImage(file, blockId) {
+  flashCopied('uploading image…');
+  try {
+    // Downscale to keep uploads small — 1200px is plenty for a note
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, 1200 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width  = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/webp', 0.8));
+    const b64 = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result.split(',')[1]);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
+    });
+
+    const res = await fetch('/api/img', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: blob.type, data: b64 }),
+    });
+    if (!res.ok) throw new Error('upload failed');
+    const { id } = await res.json();
+
+    focusBlock(blockId, true);
+    document.execCommand('insertText', false,
+      `![image|480](${window.location.origin}/api/img?id=${id})`);
+    flashCopied('image added ✓');
+  } catch (e) {
+    flashCopied('image upload failed — needs the deployed site + KV');
+  }
+}
+
 // ── Export ────────────────────────────────────────────────────────────────────
 function markdownString() {
   return blocks.map(b => {
@@ -1698,11 +1734,19 @@ function attachEvents() {
     }
   });
 
-  // Paste as plain text — the note is plain text + markdown, never rich HTML
+  // Paste: real image data uploads to the image store; everything else lands as plain text
   docContainer.addEventListener('paste', (e) => {
     const content = e.target.closest('.block-content');
     if (!content) return;
     e.preventDefault();
+
+    const blockId = getBlockIdFromEl(content);
+    const imgItem = [...(e.clipboardData?.items || [])].find(it => it.type.startsWith('image/'));
+    if (imgItem && getBlockData(blockId)?.type === 'text') {
+      const file = imgItem.getAsFile();
+      if (file) { uploadPastedImage(file, blockId); return; }
+    }
+
     let text = (e.clipboardData || window.clipboardData).getData('text/plain');
     if (!text) return;
     // A bare image URL pasted into a text block becomes a markdown image
