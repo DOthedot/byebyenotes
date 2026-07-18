@@ -300,11 +300,36 @@ button { font-family: inherit; }
 .md-img.left   { justify-content: flex-start; }
 .md-img.center { justify-content: center; }
 .md-img.right  { justify-content: flex-end; }
+.md-img .img-box {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
 .md-img img {
+  display: block;
   max-width: 100%;
   border-radius: var(--radius);
   border: 1px solid var(--border-soft);
+  cursor: grab;
+  user-select: none;
 }
+.md-img img.dragging { cursor: grabbing; opacity: 0.85; }
+.md-img .img-handle {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--accent);
+  border: 2px solid var(--bg-page);
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.md-img .img-box:hover .img-handle { opacity: 1; }
+@media (hover: none) { .md-img .img-handle { opacity: 1; } }
 
 .md-code {
   background: var(--bg-code);

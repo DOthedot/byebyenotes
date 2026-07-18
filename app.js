@@ -119,7 +119,7 @@ function renderMarkdown(text) {
     if ((m = line.match(/^!\[([^\]]*?)(?:\|(\d{2,4}))?(?:\|(left|center|right))?\]\((https?:\/\/\S+)\)\s*$/))) {
       anyMd = true;
       const width = m[2] ? ` style="width:${m[2]}px"` : '';
-      return `<div class="md-img ${m[3] || 'left'}"><img src="${escapeHtml(m[4])}" alt="${escapeHtml(m[1])}" loading="lazy"${width}></div>`;
+      return `<div class="md-img ${m[3] || 'left'}" data-line="${i}"><span class="img-box"><img src="${escapeHtml(m[4])}" alt="${escapeHtml(m[1])}" loading="lazy" draggable="false"${width}><span class="img-handle" title="drag to resize"></span></span></div>`;
     }
     if ((m = line.match(/^- \[([ xX])\] (.*)$/))) {
       anyMd = true;
@@ -1183,6 +1183,26 @@ function renderRecent() {
   });
 }
 
+// Rewrite an image markdown line after a drag-resize or drag-place
+function updateImageLine(blockId, lineIdx, changes) {
+  const block = getBlockData(blockId);
+  if (!block) return;
+  const lines = getBlockText(block).split('\n');
+  const m = (lines[lineIdx] || '').match(/^!\[([^\]]*?)(?:\|(\d{2,4}))?(?:\|(left|center|right))?\]\((https?:\/\/\S+)\)\s*$/);
+  if (!m) return;
+  const width = changes.width ?? (m[2] ? Number(m[2]) : null);
+  const align = changes.align ?? m[3] ?? null;
+  let head = m[1];
+  if (width) head += `|${width}`;
+  if (align && align !== 'left' && width) head += `|${align}`;
+  lines[lineIdx] = `![${head}](${m[4]})`;
+  block.content = lines.join('\n');
+  const contentEl = getContentEl(blockId);
+  if (contentEl) contentEl.innerText = block.content;
+  syncMarkdown(blockId);
+  scheduleSync();
+}
+
 // ── Pasted images (compressed client-side, stored via /api/img) ───────────────
 async function uploadPastedImage(file, blockId) {
   flashCopied('uploading image…');
@@ -1537,11 +1557,70 @@ function attachEvents() {
       return;
     }
 
+    if (e.target.closest('.md-img')) return;   // image clicks/drags never open raw editing
+
     const layer = e.target.closest('.md-layer');
     if (layer) {
       focusBlock(getBlockIdFromEl(layer), true);
     }
   });
+
+  // ── Image drag: body → place (left/center/right), corner handle → resize ──
+  let imgDrag = null;
+
+  docContainer.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('.img-handle');
+    const img    = e.target.closest('.md-img img');
+    if (!handle && !img) return;
+    const wrap = e.target.closest('.md-img');
+    e.preventDefault();
+    imgDrag = {
+      mode: handle ? 'resize' : 'move',
+      img: wrap.querySelector('img'),
+      wrap,
+      blockId: getBlockIdFromEl(wrap),
+      lineIdx: Number(wrap.dataset.line),
+      startX: e.clientX,
+      startW: wrap.querySelector('img').getBoundingClientRect().width,
+      moved: false,
+    };
+    imgDrag.img.classList.add('dragging');
+  });
+
+  document.addEventListener('pointermove', (e) => {
+    if (!imgDrag) return;
+    const dx = e.clientX - imgDrag.startX;
+    if (Math.abs(dx) > 4) imgDrag.moved = true;
+    if (imgDrag.mode === 'resize') {
+      const max = imgDrag.wrap.getBoundingClientRect().width;
+      const w = Math.min(max, Math.max(80, Math.round(imgDrag.startW + dx)));
+      imgDrag.img.style.width = w + 'px';
+    } else {
+      imgDrag.img.style.transform = `translateX(${dx}px)`;
+    }
+  });
+
+  const endImgDrag = () => {
+    if (!imgDrag) return;
+    const d = imgDrag;
+    imgDrag = null;
+    d.img.classList.remove('dragging');
+    if (!d.moved) { d.img.style.transform = ''; return; }
+    const width = Math.round(d.img.getBoundingClientRect().width);
+    if (d.mode === 'resize') {
+      updateImageLine(d.blockId, d.lineIdx, { width });
+    } else {
+      const rect = d.img.getBoundingClientRect();
+      const wrapRect = d.wrap.getBoundingClientRect();
+      const center = rect.left + rect.width / 2 - wrapRect.left;
+      const third = wrapRect.width / 3;
+      const align = center < third ? 'left' : center > 2 * third ? 'right' : 'center';
+      d.img.style.transform = '';
+      updateImageLine(d.blockId, d.lineIdx, { align, width });
+    }
+  };
+  document.addEventListener('pointerup', endImgDrag);
+  document.addEventListener('pointercancel', endImgDrag);
 
   docContainer.addEventListener('keydown', (e) => {
     if (paletteOpen) return;
