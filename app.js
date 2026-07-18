@@ -563,8 +563,29 @@ function buildInsertList() {
 
 let paletteItems    = [];
 let paletteFiltered = [];
+let previewSnapshot = null;   // theme/font before live preview, to restore on cancel
+
+function revertPreview() {
+  if (!previewSnapshot) return;
+  if (currentTheme !== previewSnapshot.theme) applyTheme(previewSnapshot.theme);
+  if (currentFont  !== previewSnapshot.font)  applyFont(previewSnapshot.font);
+  previewSnapshot = null;
+}
+
+function previewHighlighted() {
+  if (paletteMode !== 'theme' && paletteMode !== 'font') return;
+  const item = paletteFiltered[paletteIndex];
+  if (!item) return;
+  if (paletteMode === 'theme') applyTheme(item.id);
+  else applyFont(item.id);
+}
 
 function openPalette(mode, opts = {}) {
+  if (mode === 'theme' || mode === 'font') {
+    if (!previewSnapshot) previewSnapshot = { theme: currentTheme, font: currentFont };
+  } else {
+    revertPreview();
+  }
   paletteMode  = mode;
   paletteIndex = 0;
   paletteOpen  = true;
@@ -694,9 +715,11 @@ function filterPalette(query) {
     : paletteItems;
   paletteIndex = 0;
   renderPaletteList(filtered);
+  previewHighlighted();
 }
 
 function closePalette() {
+  revertPreview();
   paletteOpen = false;
   paletteMode = null;
   paletteAnchor = null;
@@ -833,11 +856,13 @@ function confirmPalette() {
     }
     closePalette();
   } else if (paletteMode === 'font') {
+    previewSnapshot = null;   // committing — don't revert on close
     applyFont(selected.id);
     savePrefs();
     closePalette();
     scheduleSync();
   } else if (paletteMode === 'theme') {
+    previewSnapshot = null;   // committing — don't revert on close
     applyTheme(selected.id);
     savePrefs();
     closePalette();
@@ -1243,10 +1268,12 @@ function attachEvents() {
       e.preventDefault();
       paletteIndex = (paletteIndex + 1) % count;
       updatePaletteHighlight();
+      previewHighlighted();
     } else if (e.key === 'ArrowUp' && count) {
       e.preventDefault();
       paletteIndex = (paletteIndex - 1 + count) % count;
       updatePaletteHighlight();
+      previewHighlighted();
     } else if (e.key === 'Enter') {
       e.preventDefault();
       confirmPalette();
@@ -1548,6 +1575,15 @@ function attachEvents() {
         }
       }
     }
+  });
+
+  // Paste as plain text — the note is plain text + markdown, never rich HTML
+  docContainer.addEventListener('paste', (e) => {
+    const content = e.target.closest('.block-content');
+    if (!content) return;
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    if (text) document.execCommand('insertText', false, text);
   });
 
   docContainer.addEventListener('input', (e) => {
