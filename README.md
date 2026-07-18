@@ -14,6 +14,8 @@ Your blocks, font, and theme are compressed with [LZ-String](https://github.com/
 - **Command palette** — `/` in an empty block inserts at the caret; `⌘K` opens global commands
 - **Share panel** — `⌘⇧C` copies the link and shows a QR code (scan → note opens on your phone) plus a URL-capacity gauge
 - **Recent notes** — your last notes are kept in localStorage and listed on the start screen; the URL also auto-syncs as you type, so refreshing never loses work
+- **Cross-device sync (opt-in)** — `/sync` + a passphrase syncs your recent notes and theme/font across devices via Vercel KV. The passphrase never leaves the browser (only its SHA-256 hash keys the store). Logged out, the app stays 100% serverless
+- **Remembered preferences** — your chosen theme and font apply to every fresh note (localStorage)
 - **Focus mode** — `/focus` or `⌘.` dims everything but the block you're writing
 - **Hover controls** — move, delete, and add blocks with the hover gutter; code blocks get a header with language badge, line count, and copy
 - **Mobile editing** — floating `/` button, bottom-sheet palette, tap-to-select block toolbar
@@ -50,6 +52,7 @@ Type `/` to open the palette, then search or pick:
 |---------|--------|
 | `/box` | Insert a code block (choose language) |
 | `/share` | Open the share panel — link, QR code, URL capacity |
+| `/sync` | Cross-device sync via passphrase (again to turn off) |
 | `/focus` | Toggle distraction-free focus mode |
 | `/font` | Switch font — active font marked `current` |
 | `/theme` | Switch theme — active theme marked `current` |
@@ -65,6 +68,16 @@ No build step — just open `index.html` in a browser, or serve it:
 ```bash
 npx serve .
 ```
+
+## Enabling cross-device sync (one-time setup)
+
+Sync needs a KV store attached to the Vercel project:
+
+1. Vercel dashboard → your project → **Storage** → **Create Database** → **Upstash Redis** (free tier is plenty)
+2. Connect it to the project — Vercel injects `KV_REST_API_URL` / `KV_REST_API_TOKEN` (or `UPSTASH_REDIS_REST_*`) automatically
+3. Redeploy. Done — `/sync` now works.
+
+Without a KV store, `/api/sync` returns 503 and the app quietly stays local-only.
 
 ## Tech stack
 

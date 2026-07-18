@@ -31,8 +31,11 @@ const HLJS_THEME_URLS = {
 const URL_SAFE_LIMIT = 8000;   // conservative cross-browser URL length budget
 const QR_MAX_CHARS   = 2800;   // QR version 40, level L, 8-bit capacity ≈ 2953
 const SNAP_KEY       = 'bbn.recent';
+const PREFS_KEY      = 'bbn.prefs';
+const SYNC_KEY_LS    = 'bbn.syncKey';
 const SNAP_MAX       = 8;
 const SYNC_DELAY     = 800;
+const PUSH_DELAY     = 2000;
 
 // ── App state ─────────────────────────────────────────────────────────────────
 let currentFont  = 'jetbrains-mono';
@@ -54,6 +57,8 @@ let shareOpen    = false;
 let emptyVisible = false;
 let syncTimer    = null;
 let lastUrlLen   = 0;
+let syncKey      = null;   // SHA-256(passphrase) hex — presence means cross-device sync is on
+let pushTimer    = null;
 
 // ── DOM refs (populated in DOMContentLoaded) ──────────────────────────────────
 let docContainer, statusMode, statusLang, statusFont, statusUrl, statusUrlFill,
@@ -174,6 +179,92 @@ function saveSnapshot(snap) {
     list.unshift(snap);
     localStorage.setItem(SNAP_KEY, JSON.stringify(list.slice(0, SNAP_MAX)));
   } catch (e) { /* storage unavailable — feature quietly off */ }
+  schedulePush();
+}
+
+// Newest entry per note id wins; result sorted newest-first, capped.
+function mergeRecents(a, b) {
+  const byNid = new Map();
+  [...(a || []), ...(b || [])].forEach(s => {
+    if (!s || !s.nid) return;
+    const cur = byNid.get(s.nid);
+    if (!cur || (s.t || 0) > (cur.t || 0)) byNid.set(s.nid, s);
+  });
+  return [...byNid.values()].sort((x, y) => (y.t || 0) - (x.t || 0)).slice(0, SNAP_MAX);
+}
+
+// ── Theme/font preferences (localStorage + optional sync) ─────────────────────
+function loadPrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: currentTheme, font: currentFont }));
+  } catch (e) { /* fine */ }
+  schedulePush();
+}
+
+// ── Cross-device sync (passphrase → SHA-256 key → /api/sync KV blob) ──────────
+async function derivePassKey(phrase) {
+  const data = new TextEncoder().encode('bbn-sync-v1:' + phrase);
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function syncPull() {
+  if (!syncKey) return;
+  const res = await fetch('/api/sync', { headers: { 'x-sync-key': syncKey } });
+  if (!res.ok) throw new Error('pull failed');
+  const { data } = await res.json();
+  if (!data) return;
+  const merged = mergeRecents(loadSnapshots(), data.recents || []);
+  try { localStorage.setItem(SNAP_KEY, JSON.stringify(merged)); } catch (e) {}
+  // Adopt remote prefs unless a shared note's own theme/font is on screen
+  if (data.prefs && !window.location.hash) {
+    if (THEMES.includes(data.prefs.theme)) applyTheme(data.prefs.theme);
+    if (FONTS.includes(data.prefs.font))   applyFont(data.prefs.font);
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: currentTheme, font: currentFont })); } catch (e) {}
+  }
+  if (emptyVisible) renderRecent();
+}
+
+function schedulePush() {
+  if (!syncKey) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    fetch('/api/sync', {
+      method: 'PUT',
+      headers: { 'x-sync-key': syncKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recents: loadSnapshots(), prefs: loadPrefs() }),
+    }).catch(() => {});
+  }, PUSH_DELAY);
+}
+
+async function enableSync(phrase) {
+  try {
+    syncKey = await derivePassKey(phrase);
+    localStorage.setItem(SYNC_KEY_LS, syncKey);
+    flashCopied('sync: connecting…');
+    await syncPull();
+    schedulePush();
+    flashCopied('sync on ✓');
+  } catch (e) {
+    syncKey = null;
+    try { localStorage.removeItem(SYNC_KEY_LS); } catch (err) {}
+    flashCopied('sync failed — server not reachable');
+  }
+}
+
+function disableSync() {
+  syncKey = null;
+  clearTimeout(pushTimer);
+  try { localStorage.removeItem(SYNC_KEY_LS); } catch (e) {}
+  flashCopied('sync off — this device keeps its local copy');
 }
 
 // ── Block model ───────────────────────────────────────────────────────────────
@@ -445,6 +536,7 @@ function buildCommandList() {
     { id: 'theme',  label: '/theme',  ico: '◐',  desc: 'change theme' },
     { id: 'font',   label: '/font',   ico: 'Aa', desc: 'change font' },
     { id: 'export', label: '/export', ico: '⇩',  desc: 'md · pdf · docx · html' },
+    { id: 'sync',   label: '/sync',   ico: '⟲',  desc: syncKey ? 'turn off cross-device sync' : 'sync notes across devices', hint: syncKey ? 'on' : null },
     { id: 'delete', label: '/delete', ico: '✕',  desc: 'delete current block' },
     { id: 'newNote', label: '/newNote', ico: '✚', desc: 'start a fresh note' },
     { id: 'saveBeforeNew', label: '/save_before_new', ico: '⋯', desc: 'save before new note', hint: saveBeforeNew ? 'on' : 'off' },
@@ -497,10 +589,15 @@ function openPalette(mode, opts = {}) {
   } else if (mode === 'filename') {
     paletteTitle.textContent = 'Save as';
     paletteItems = [];
+  } else if (mode === 'syncPhrase') {
+    paletteTitle.textContent = 'Sync passphrase';
+    paletteItems = [];
   }
 
   paletteSearch.value       = '';
-  paletteSearch.placeholder = mode === 'filename' ? 'enter filename...' : 'search...';
+  paletteSearch.placeholder = mode === 'filename' ? 'enter filename...'
+    : mode === 'syncPhrase' ? 'enter a passphrase (6+ chars)...'
+    : 'search...';
   renderPaletteList(paletteItems);
   paletteOverlay.classList.remove('hidden');
   positionPalette();
@@ -634,6 +731,17 @@ function confirmPalette() {
     return;
   }
 
+  if (paletteMode === 'syncPhrase') {
+    const phrase = paletteSearch.value.trim();
+    if (phrase.length < 6) {
+      paletteTitle.textContent = 'Sync passphrase — too short, use 6+ chars';
+      return;
+    }
+    closePalette();
+    enableSync(phrase);
+    return;
+  }
+
   if (paletteFiltered.length === 0) return;
   const selected = paletteFiltered[paletteIndex];
   if (!selected) return;
@@ -642,6 +750,11 @@ function confirmPalette() {
     if (selected.id === 'box') { openPalette('lang'); return; }
     if (selected.id === 'share') { closePalette(); openShare(); return; }
     if (selected.id === 'focus') { closePalette(); toggleFocus(); return; }
+    if (selected.id === 'sync') {
+      if (syncKey) { closePalette(); disableSync(); }
+      else openPalette('syncPhrase');
+      return;
+    }
     if (selected.id === 'newNote') {
       if (saveBeforeNew) {
         pendingExport = 'newNote';
@@ -713,10 +826,12 @@ function confirmPalette() {
     closePalette();
   } else if (paletteMode === 'font') {
     applyFont(selected.id);
+    savePrefs();
     closePalette();
     scheduleSync();
   } else if (paletteMode === 'theme') {
     applyTheme(selected.id);
+    savePrefs();
     closePalette();
     scheduleSync();
   } else if (paletteMode === 'export') {
@@ -1433,6 +1548,10 @@ function loadState() {
     noteId = Math.random().toString(36).slice(2, 10);
     blocks = [createBlock('text')];
     lastUrlLen = 0;
+    // Fresh note: start in the user's preferred theme/font instead of the defaults
+    const prefs = loadPrefs();
+    if (THEMES.includes(prefs.theme)) currentTheme = prefs.theme;
+    if (FONTS.includes(prefs.font))   currentFont  = prefs.font;
   }
 
   applyFont(currentFont);
@@ -1474,10 +1593,17 @@ document.addEventListener('DOMContentLoaded', () => {
   statusHint.textContent = '/ insert · ⌘K commands · ⌘⇧C share · ⌘. focus';
   exampleLink.href = '#' + encodeState(EXAMPLE_STATE);
 
+  try {
+    const stored = localStorage.getItem(SYNC_KEY_LS);
+    if (stored && /^[0-9a-f]{64}$/.test(stored)) syncKey = stored;
+  } catch (e) {}
+
   loadState();
   maybeShowEmptyState();
   attachEvents();
   updateStatus();
+
+  if (syncKey) syncPull().catch(() => {});
 });
 
 // ── Export for tests (no-op in browser) ──────────────────────────────────────
@@ -1485,6 +1611,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
-    capacityLevel, timeAgo,
+    capacityLevel, timeAgo, mergeRecents,
   };
 }
