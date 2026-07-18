@@ -733,6 +733,7 @@ function closePalette() {
 function updatePaletteHighlight() {
   Array.from(paletteList.children).forEach((li, i) => {
     li.classList.toggle('active', i === paletteIndex);
+    if (i === paletteIndex) li.scrollIntoView({ block: 'nearest' });
   });
 }
 
