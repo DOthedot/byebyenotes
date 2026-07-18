@@ -1558,7 +1558,7 @@ function attachEvents() {
       }
     }
 
-    // Enter in text block — continue checklist/bullet lists
+    // Enter in text block — continue lists inside the block, otherwise exit to a new block
     if (e.key === 'Enter' && !e.shiftKey && blockData.type === 'text') {
       const sel   = window.getSelection();
       const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
@@ -1582,6 +1582,18 @@ function attachEvents() {
           return;
         }
       }
+      // Not in a list: Enter leaves the block (Shift+Enter makes a line break inside)
+      e.preventDefault();
+      const nextBlock = blocks[blockIdx + 1];
+      if (nextBlock && blocks[blockIdx] && !(getBlockText(blocks[blockIdx]) || '').trim()) {
+        focusBlock(nextBlock.id, false);
+      } else {
+        const newText = createBlock('text');
+        insertBlockAfter(blockId, newText);
+        focusBlock(newText.id, false);
+        scheduleSync();
+      }
+      return;
     }
 
     // Enter in code block — bracket expansion or auto-indent
@@ -1622,8 +1634,9 @@ function attachEvents() {
       return;
     }
 
-    // Shift+Enter — exit block (works in text and code blocks alike)
-    if (e.key === 'Enter' && e.shiftKey) {
+    // Shift+Enter in text block — plain line break inside the block (browser default)
+    // Shift+Enter in code block — exit to next block (Enter is taken by newline+indent)
+    if (e.key === 'Enter' && e.shiftKey && blockData.type === 'code') {
       e.preventDefault();
       const nextBlock = blocks[blockIdx + 1];
       if (nextBlock) {
