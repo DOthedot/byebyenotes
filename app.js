@@ -1338,8 +1338,8 @@ function attachEvents() {
       return;
     }
 
-    // Shift+Enter inside code block — exit to next block
-    if (e.key === 'Enter' && e.shiftKey && blockData.type === 'code') {
+    // Shift+Enter — exit block (works in text and code blocks alike)
+    if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault();
       const nextBlock = blocks[blockIdx + 1];
       if (nextBlock) {
