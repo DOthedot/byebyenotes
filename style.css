@@ -237,7 +237,8 @@ button { font-family: inherit; }
   border: none;
 }
 
-.text-block .block-content:empty::before {
+/* placeholder only on a fresh note (single empty block), not every empty block */
+.text-block:only-child .block-content:empty::before {
   content: 'let ideas flow...';
   color: var(--fg);
   opacity: 0.22;
