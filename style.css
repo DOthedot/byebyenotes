@@ -595,6 +595,23 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
 .recent-item .ri-langs { color: var(--fg-faint); font-size: 10.5px; white-space: nowrap; }
 .recent-item .ri-langs b { color: var(--accent); font-weight: 400; }
 .recent-item .ri-time { margin-left: auto; font-size: 10.5px; color: var(--fg-faint); white-space: nowrap; }
+.recent-item .ri-del {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--fg-faint);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.recent-item:hover .ri-del { opacity: 1; }
+.recent-item .ri-del:hover { color: var(--danger); border-color: var(--danger); }
+@media (hover: none) { .recent-item .ri-del { opacity: 1; } }
 
 .creator-credit {
   margin-top: 40px;

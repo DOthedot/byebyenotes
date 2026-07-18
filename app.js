@@ -182,6 +182,14 @@ function saveSnapshot(snap) {
   schedulePush();
 }
 
+function deleteSnapshot(nid) {
+  try {
+    localStorage.setItem(SNAP_KEY, JSON.stringify(loadSnapshots().filter(s => s.nid !== nid)));
+  } catch (e) {}
+  schedulePush();
+  renderRecent();
+}
+
 // Newest entry per note id wins; result sorted newest-first, capped.
 function mergeRecents(a, b) {
   const byNid = new Map();
@@ -1028,8 +1036,13 @@ function renderRecent() {
       <span class="ri-ico">▸</span>
       <span class="ri-name">${escapeHtml(s.title || 'untitled')}</span>
       <span class="ri-langs">${s.blockCount} block${s.blockCount === 1 ? '' : 's'}${langs}</span>
-      <span class="ri-time">${timeAgo(s.t)}</span>`;
-    item.addEventListener('click', () => {
+      <span class="ri-time">${timeAgo(s.t)}</span>
+      <button class="ri-del" title="remove from recent notes">✕</button>`;
+    item.addEventListener('click', (e) => {
+      if (e.target.closest('.ri-del')) {
+        deleteSnapshot(s.nid);
+        return;
+      }
       dissolveEmptyState();
       window.location.hash = s.hash;
     });
