@@ -1428,6 +1428,32 @@ function attachEvents() {
       }
     }
 
+    // Enter in text block — continue checklist/bullet lists
+    if (e.key === 'Enter' && !e.shiftKey && blockData.type === 'text') {
+      const sel   = window.getSelection();
+      const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
+      const node  = range?.collapsed ? range.startContainer : null;
+      if (node && node.nodeType === Node.TEXT_NODE) {
+        const upto   = node.textContent.slice(0, range.startOffset);
+        const lastNL = upto.lastIndexOf('\n');
+        const line   = lastNL === -1 ? upto : upto.slice(lastNL + 1);
+        const check  = line.match(/^- \[[ xX]\] ?(.*)$/);
+        const bullet = check ? null : line.match(/^- (.*)$/);
+        if (check || bullet) {
+          e.preventDefault();
+          const rest = (check ? check[1] : bullet[1]).trim();
+          if (rest) {
+            document.execCommand('insertText', false, check ? '\n- [ ] ' : '\n- ');
+          } else {
+            // Enter on an empty marker line ends the list: clear the marker
+            for (let i = 0; i < line.length; i++) sel.modify('extend', 'backward', 'character');
+            document.execCommand('delete');
+          }
+          return;
+        }
+      }
+    }
+
     // Enter in code block — bracket expansion or auto-indent
     if (e.key === 'Enter' && !e.shiftKey && blockData.type === 'code') {
       e.preventDefault();
