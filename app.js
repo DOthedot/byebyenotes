@@ -116,10 +116,18 @@ function renderMarkdown(text) {
       anyMd = true;
       return '<div class="md-divider"></div>';
     }
-    if ((m = line.match(/^!\[([^\]]*?)(?:\|(\d{2,4}))?(?:\|(left|center|right))?\]\((https?:\/\/\S+)\)\s*$/))) {
+    if ((m = line.match(/^!\[([^\]]*?)(?:\|(\d{2,4}))?(?:\|(left|center|right|pos:-?[\d.]+,-?\d+,-?\d+))?\]\((https?:\/\/\S+)\)\s*$/))) {
       anyMd = true;
       const width = m[2] ? ` style="width:${m[2]}px"` : '';
-      return `<div class="md-img ${m[3] || 'left'}" data-line="${i}"><span class="img-box"><img src="${escapeHtml(m[4])}" alt="${escapeHtml(m[1])}" loading="lazy" draggable="false"${width}><span class="img-handle" title="drag to resize"></span></span></div>`;
+      let cls = 'left', boxStyle = '';
+      if (m[3] && m[3].startsWith('pos:')) {
+        const [x, y, r] = m[3].slice(4).split(',').map(Number);
+        cls = 'free';
+        boxStyle = ` style="left:${x}%;top:${y}px;transform:rotate(${r}deg)"`;
+      } else if (m[3]) {
+        cls = m[3];
+      }
+      return `<div class="md-img ${cls}" data-line="${i}"><span class="img-box"${boxStyle}><img src="${escapeHtml(m[4])}" alt="${escapeHtml(m[1])}" loading="lazy" draggable="false"${width}><span class="img-rotate" title="drag to tilt">⟳</span><span class="img-handle" title="drag to resize"></span></span></div>`;
     }
     if ((m = line.match(/^- \[([ xX])\] (.*)$/))) {
       anyMd = true;
@@ -1183,18 +1191,20 @@ function renderRecent() {
   });
 }
 
-// Rewrite an image markdown line after a drag-resize or drag-place
+// Rewrite an image markdown line after a drag (place/tilt) or resize
 function updateImageLine(blockId, lineIdx, changes) {
   const block = getBlockData(blockId);
   if (!block) return;
   const lines = getBlockText(block).split('\n');
-  const m = (lines[lineIdx] || '').match(/^!\[([^\]]*?)(?:\|(\d{2,4}))?(?:\|(left|center|right))?\]\((https?:\/\/\S+)\)\s*$/);
+  const m = (lines[lineIdx] || '').match(/^!\[([^\]]*?)(?:\|(\d{2,4}))?(?:\|(left|center|right|pos:-?[\d.]+,-?\d+,-?\d+))?\]\((https?:\/\/\S+)\)\s*$/);
   if (!m) return;
   const width = changes.width ?? (m[2] ? Number(m[2]) : null);
-  const align = changes.align ?? m[3] ?? null;
+  let place = changes.pos
+    ? `pos:${changes.pos.x},${changes.pos.y},${changes.pos.r}`
+    : (changes.align ?? m[3] ?? null);
   let head = m[1];
   if (width) head += `|${width}`;
-  if (align && align !== 'left' && width) head += `|${align}`;
+  if (place && place !== 'left' && width) head += `|${place}`;
   lines[lineIdx] = `![${head}](${m[4]})`;
   block.content = lines.join('\n');
   const contentEl = getContentEl(blockId);
@@ -1569,19 +1579,26 @@ function attachEvents() {
   let imgDrag = null;
 
   docContainer.addEventListener('pointerdown', (e) => {
-    const handle = e.target.closest('.img-handle');
+    const resize = e.target.closest('.img-handle');
+    const rotate = e.target.closest('.img-rotate');
     const img    = e.target.closest('.md-img img');
-    if (!handle && !img) return;
+    if (!resize && !rotate && !img) return;
     const wrap = e.target.closest('.md-img');
+    const box  = wrap.querySelector('.img-box');
     e.preventDefault();
     imgDrag = {
-      mode: handle ? 'resize' : 'move',
+      mode: resize ? 'resize' : rotate ? 'rotate' : 'move',
       img: wrap.querySelector('img'),
+      box,
       wrap,
       blockId: getBlockIdFromEl(wrap),
       lineIdx: Number(wrap.dataset.line),
       startX: e.clientX,
+      startY: e.clientY,
       startW: wrap.querySelector('img').getBoundingClientRect().width,
+      startLeft: parseFloat(box.style.left) || 0,     // % of wrapper width
+      startTop:  parseFloat(box.style.top)  || 0,     // px
+      startRot:  (box.style.transform.match(/rotate\((-?\d+(?:\.\d+)?)deg\)/) || [])[1] * 1 || 0,
       moved: false,
     };
     imgDrag.img.classList.add('dragging');
@@ -1589,14 +1606,22 @@ function attachEvents() {
 
   document.addEventListener('pointermove', (e) => {
     if (!imgDrag) return;
-    const dx = e.clientX - imgDrag.startX;
-    if (Math.abs(dx) > 4) imgDrag.moved = true;
-    if (imgDrag.mode === 'resize') {
-      const max = imgDrag.wrap.getBoundingClientRect().width;
-      const w = Math.min(max, Math.max(80, Math.round(imgDrag.startW + dx)));
-      imgDrag.img.style.width = w + 'px';
+    const d  = imgDrag;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
+    if (d.mode === 'resize') {
+      const max = d.wrap.getBoundingClientRect().width;
+      const w = Math.min(max, Math.max(80, Math.round(d.startW + dx)));
+      d.img.style.width = w + 'px';
+    } else if (d.mode === 'rotate') {
+      const rot = Math.max(-45, Math.min(45, Math.round(d.startRot + dx * 0.35)));
+      d.box.style.transform = `rotate(${rot}deg)`;
     } else {
-      imgDrag.img.style.transform = `translateX(${dx}px)`;
+      const wrapW = d.wrap.getBoundingClientRect().width || 1;
+      const x = Math.max(-15, Math.min(95, d.startLeft + (dx / wrapW) * 100));
+      d.box.style.left = `${x}%`;
+      d.box.style.top  = `${d.startTop + dy}px`;
     }
   });
 
@@ -1605,19 +1630,18 @@ function attachEvents() {
     const d = imgDrag;
     imgDrag = null;
     d.img.classList.remove('dragging');
-    if (!d.moved) { d.img.style.transform = ''; return; }
+    if (!d.moved) return;
     const width = Math.round(d.img.getBoundingClientRect().width);
     if (d.mode === 'resize') {
       updateImageLine(d.blockId, d.lineIdx, { width });
-    } else {
-      const rect = d.img.getBoundingClientRect();
-      const wrapRect = d.wrap.getBoundingClientRect();
-      const center = rect.left + rect.width / 2 - wrapRect.left;
-      const third = wrapRect.width / 3;
-      const align = center < third ? 'left' : center > 2 * third ? 'right' : 'center';
-      d.img.style.transform = '';
-      updateImageLine(d.blockId, d.lineIdx, { align, width });
+      return;
     }
+    const pos = {
+      x: Math.round((parseFloat(d.box.style.left) || 0) * 10) / 10,
+      y: Math.round(parseFloat(d.box.style.top) || 0),
+      r: Math.round((d.box.style.transform.match(/rotate\((-?\d+(?:\.\d+)?)deg\)/) || [])[1] * 1 || 0),
+    };
+    updateImageLine(d.blockId, d.lineIdx, { pos, width });
   };
   document.addEventListener('pointerup', endImgDrag);
   document.addEventListener('pointercancel', endImgDrag);

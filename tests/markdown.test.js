@@ -61,6 +61,14 @@ test('markdown images render with width and alignment', () => {
   expect(renderMarkdown('![x](javascript:alert(1))')).not.toContain('<img');
 });
 
+test('free-positioned images render offset and rotation', () => {
+  const html = renderMarkdown('![pic|300|pos:22.5,-40,-7](https://x.com/a.png)');
+  expect(html).toContain('md-img free');
+  expect(html).toContain('left:22.5%');
+  expect(html).toContain('top:-40px');
+  expect(html).toContain('rotate(-7deg)');
+});
+
 // ── toggleCheckboxLine ──
 test('toggleCheckboxLine flips unchecked to checked and back', () => {
   const src = '- [ ] task\n- [x] other';
