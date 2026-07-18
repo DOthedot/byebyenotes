@@ -6,8 +6,8 @@ const KV_URL   = process.env.KV_REST_API_URL   || process.env.UPSTASH_REDIS_REST
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 
 const KEY_RE      = /^[0-9a-f]{64}$/;
-const MAX_RECENTS = 20;
-const MAX_BYTES   = 120000;
+const MAX_RECENTS = 60;
+const MAX_BYTES   = 400000;
 
 async function kv(command) {
   const res = await fetch(KV_URL, {

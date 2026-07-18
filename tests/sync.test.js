@@ -3,9 +3,9 @@ global.LZString = {
   decompressFromEncodedURIComponent: (s) => { try { return atob(s); } catch(e) { return null; } }
 };
 
-const { mergeRecents } = require('../app.js');
+const { mergeRecents, groupByFolder } = require('../app.js');
 
-const snap = (nid, t, title = nid) => ({ nid, t, title, blockCount: 1, langs: [] });
+const snap = (nid, t, title = nid, folder = null) => ({ nid, t, title, folder, blockCount: 1, langs: [] });
 
 test('mergeRecents keeps newest entry per note id', () => {
   const local  = [snap('a', 100), snap('b', 50)];
@@ -15,11 +15,27 @@ test('mergeRecents keeps newest entry per note id', () => {
   expect(merged[0].title).toBe('a-newer');
 });
 
-test('mergeRecents sorts newest-first and caps at 8', () => {
-  const many = Array.from({ length: 12 }, (_, i) => snap(`n${i}`, i));
+test('mergeRecents sorts newest-first and caps at 30', () => {
+  const many = Array.from({ length: 35 }, (_, i) => snap(`n${i}`, i));
   const merged = mergeRecents(many, []);
-  expect(merged).toHaveLength(8);
-  expect(merged[0].nid).toBe('n11');
+  expect(merged).toHaveLength(30);
+  expect(merged[0].nid).toBe('n34');
+});
+
+test('groupByFolder splits loose notes from sorted folders', () => {
+  const snaps = [
+    snap('a', 3), snap('b', 2, 'b', 'work'), snap('c', 1, 'c', 'ideas'), snap('d', 0, 'd', 'work'),
+  ];
+  const { loose, folders } = groupByFolder(snaps);
+  expect(loose.map(s => s.nid)).toEqual(['a']);
+  expect(folders.map(f => f[0])).toEqual(['ideas', 'work']);
+  expect(folders[1][1].map(s => s.nid)).toEqual(['b', 'd']);
+});
+
+test('groupByFolder treats blank folder as loose', () => {
+  const { loose, folders } = groupByFolder([snap('a', 1, 'a', '  '), snap('b', 0)]);
+  expect(loose).toHaveLength(2);
+  expect(folders).toHaveLength(0);
 });
 
 test('mergeRecents tolerates null/invalid input', () => {

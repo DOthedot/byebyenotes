@@ -33,7 +33,7 @@ const QR_MAX_CHARS   = 2800;   // QR version 40, level L, 8-bit capacity ≈ 295
 const SNAP_KEY       = 'bbn.recent';
 const PREFS_KEY      = 'bbn.prefs';
 const SYNC_KEY_LS    = 'bbn.syncKey';
-const SNAP_MAX       = 8;
+const SNAP_MAX       = 30;
 const SYNC_DELAY     = 800;
 const PUSH_DELAY     = 2000;
 
@@ -49,6 +49,8 @@ let paletteMode  = null;        // 'command' | 'insert' | 'lang' | 'changeLang' 
 let paletteIndex = 0;
 let paletteAnchor = null;       // {x, y} viewport coords for caret-anchored palette
 let changeLangTarget = null;    // block id whose language is being changed
+let folderTarget     = null;    // snapshot nid being filed into a folder
+const collapsedFolders = new Set();
 let copiedTimer  = null;
 let saveBeforeNew  = true;
 let pendingExport  = null;      // 'md' | 'pdf' | 'docx' | 'html' | 'newNote'
@@ -180,6 +182,33 @@ function saveSnapshot(snap) {
     localStorage.setItem(SNAP_KEY, JSON.stringify(list.slice(0, SNAP_MAX)));
   } catch (e) { /* storage unavailable — feature quietly off */ }
   schedulePush();
+}
+
+function groupByFolder(snaps) {
+  const loose = [];
+  const map = new Map();
+  (snaps || []).forEach(s => {
+    const f = (s.folder || '').trim();
+    if (!f) loose.push(s);
+    else {
+      if (!map.has(f)) map.set(f, []);
+      map.get(f).push(s);
+    }
+  });
+  return { loose, folders: [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])) };
+}
+
+function assignFolder(nid, folder) {
+  try {
+    const list = loadSnapshots();
+    const s = list.find(x => x.nid === nid);
+    if (s) {
+      s.folder = folder || null;
+      localStorage.setItem(SNAP_KEY, JSON.stringify(list));
+    }
+  } catch (e) {}
+  schedulePush();
+  renderRecent();
 }
 
 function deleteSnapshot(nid) {
@@ -622,11 +651,19 @@ function openPalette(mode, opts = {}) {
   } else if (mode === 'syncPhrase') {
     paletteTitle.textContent = 'Sync passphrase';
     paletteItems = [];
+  } else if (mode === 'folder') {
+    paletteTitle.textContent = 'Move to folder';
+    const folders = [...new Set(loadSnapshots().map(s => (s.folder || '').trim()).filter(Boolean))].sort();
+    paletteItems = [
+      { id: '__none', label: 'no folder', ico: '—', desc: 'top level' },
+      ...folders.map(f => ({ id: f, label: f + '/', ico: '▸' })),
+    ];
   }
 
   paletteSearch.value       = '';
   paletteSearch.placeholder = mode === 'filename' ? 'enter filename...'
     : mode === 'syncPhrase' ? 'enter a passphrase (6+ chars)...'
+    : mode === 'folder' ? 'pick, or type a new folder name...'
     : 'search...';
   renderPaletteList(paletteItems);
   paletteOverlay.classList.remove('hidden');
@@ -730,7 +767,8 @@ function closePalette() {
   paletteOverlay.classList.add('hidden');
   paletteOverlay.classList.remove('preview');
   paletteEl.classList.remove('anchored');
-  if (activeBlockId !== null) getContentEl(activeBlockId)?.focus();
+  folderTarget = null;
+  if (activeBlockId !== null && !emptyVisible) getContentEl(activeBlockId)?.focus();
   updateStatus();
 }
 
@@ -775,6 +813,16 @@ function confirmPalette() {
     }
     closePalette();
     enableSync(phrase);
+    return;
+  }
+
+  if (paletteMode === 'folder') {
+    const typed    = paletteSearch.value.trim().replace(/\/+$/, '');
+    const selected = paletteFiltered[paletteIndex];
+    const value    = selected ? (selected.id === '__none' ? null : selected.id) : (typed || null);
+    const target   = folderTarget;
+    closePalette();
+    if (target !== null) assignFolder(target, value);
     return;
   }
 
@@ -1056,6 +1104,35 @@ function dissolveEmptyState() {
   setTimeout(() => emptyState.classList.add('hidden'), 380);
 }
 
+function makeRecentRow(s) {
+  const item = document.createElement('div');
+  item.className = 'recent-item';
+  const langs = (s.langs || []).length
+    ? ` · <b>${escapeHtml(s.langs.join(', '))}</b>`
+    : '';
+  item.innerHTML = `
+    <span class="ri-ico">▸</span>
+    <span class="ri-name">${escapeHtml(s.title || 'untitled')}</span>
+    <span class="ri-langs">${s.blockCount} block${s.blockCount === 1 ? '' : 's'}${langs}</span>
+    <span class="ri-time">${timeAgo(s.t)}</span>
+    <button class="ri-folder" title="move to folder">▦</button>
+    <button class="ri-del" title="remove from recent notes">✕</button>`;
+  item.addEventListener('click', (e) => {
+    if (e.target.closest('.ri-del')) {
+      deleteSnapshot(s.nid);
+      return;
+    }
+    if (e.target.closest('.ri-folder')) {
+      folderTarget = s.nid;
+      openPalette('folder');
+      return;
+    }
+    dissolveEmptyState();
+    window.location.hash = s.hash;
+  });
+  return item;
+}
+
 function renderRecent() {
   const snaps = loadSnapshots();
   recentList.innerHTML = '';
@@ -1064,27 +1141,31 @@ function renderRecent() {
     return;
   }
   recentSection.classList.remove('hidden');
-  snaps.slice(0, 4).forEach(s => {
-    const item = document.createElement('div');
-    item.className = 'recent-item';
-    const langs = (s.langs || []).length
-      ? ` · <b>${escapeHtml(s.langs.join(', '))}</b>`
-      : '';
-    item.innerHTML = `
-      <span class="ri-ico">▸</span>
-      <span class="ri-name">${escapeHtml(s.title || 'untitled')}</span>
-      <span class="ri-langs">${s.blockCount} block${s.blockCount === 1 ? '' : 's'}${langs}</span>
-      <span class="ri-time">${timeAgo(s.t)}</span>
-      <button class="ri-del" title="remove from recent notes">✕</button>`;
-    item.addEventListener('click', (e) => {
-      if (e.target.closest('.ri-del')) {
-        deleteSnapshot(s.nid);
-        return;
-      }
-      dissolveEmptyState();
-      window.location.hash = s.hash;
+  const { loose, folders } = groupByFolder(snaps);
+
+  loose.slice(0, 6).forEach(s => recentList.appendChild(makeRecentRow(s)));
+
+  folders.forEach(([name, items]) => {
+    const collapsed = collapsedFolders.has(name);
+    const head = document.createElement('div');
+    head.className = 'recent-folder';
+    head.innerHTML = `
+      <span class="rf-caret">${collapsed ? '▸' : '▾'}</span>
+      <span class="rf-name">${escapeHtml(name)}/</span>
+      <span class="rf-count">${items.length}</span>`;
+    head.addEventListener('click', () => {
+      if (collapsed) collapsedFolders.delete(name);
+      else collapsedFolders.add(name);
+      renderRecent();
     });
-    recentList.appendChild(item);
+    recentList.appendChild(head);
+    if (!collapsed) {
+      items.forEach(s => {
+        const row = makeRecentRow(s);
+        row.classList.add('in-folder');
+        recentList.appendChild(row);
+      });
+    }
   });
 }
 
@@ -1699,6 +1780,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
-    capacityLevel, timeAgo, mergeRecents,
+    capacityLevel, timeAgo, mergeRecents, groupByFolder,
   };
 }

@@ -13,7 +13,8 @@ Your blocks, font, and theme are compressed with [LZ-String](https://github.com/
 - **Syntax highlighting** — Python, JavaScript, TypeScript, SQL, Bash, JSON, YAML, Go, Rust via highlight.js
 - **Command palette** — `/` in an empty block inserts at the caret; `⌘K` opens global commands
 - **Share panel** — `⌘⇧C` copies the link and shows a QR code (scan → note opens on your phone) plus a URL-capacity gauge
-- **Recent notes** — your last notes are kept in localStorage and listed on the start screen; the URL also auto-syncs as you type, so refreshing never loses work
+- **Recent notes** — your last 30 notes are kept in localStorage and listed on the start screen; the URL also auto-syncs as you type, so refreshing never loses work
+- **Folders** — hover a recent note and hit ▦ to file it into a folder (pick one or type a new name); folders are collapsible and sync across devices
 - **Cross-device sync (opt-in)** — `/sync` + a passphrase syncs your recent notes and theme/font across devices via Vercel KV. The passphrase never leaves the browser (only its SHA-256 hash keys the store). Logged out, the app stays 100% serverless
 - **Remembered preferences** — your chosen theme and font apply to every fresh note (localStorage)
 - **Focus mode** — `/focus` or `⌘.` dims everything but the block you're writing
