@@ -629,6 +629,8 @@ function openPalette(mode, opts = {}) {
     : 'search...';
   renderPaletteList(paletteItems);
   paletteOverlay.classList.remove('hidden');
+  // In theme/font mode the document is the preview — don't dim/blur it
+  paletteOverlay.classList.toggle('preview', mode === 'theme' || mode === 'font');
   positionPalette();
   paletteSearch.focus();
   updateStatus();
@@ -725,6 +727,7 @@ function closePalette() {
   paletteAnchor = null;
   changeLangTarget = null;
   paletteOverlay.classList.add('hidden');
+  paletteOverlay.classList.remove('preview');
   paletteEl.classList.remove('anchored');
   if (activeBlockId !== null) getContentEl(activeBlockId)?.focus();
   updateStatus();

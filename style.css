@@ -636,6 +636,7 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
   backdrop-filter: blur(1.5px);
 }
 #palette-overlay.hidden { display: none; }
+#palette-overlay.preview { background: transparent; backdrop-filter: none; }
 
 #palette {
   position: absolute;
