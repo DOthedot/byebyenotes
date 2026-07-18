@@ -4,32 +4,107 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>byebyenotes</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0c0d'/%3E%3Crect x='8' y='8' width='6' height='16' fill='%234ec94e'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=IBM+Plex+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Roboto+Mono:wght@400;500&family=Source+Code+Pro:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/monokai.min.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div id="document-container"></div>
-<div id="status">
-    <span id="status-lang"></span>
-    <span id="status-font"></span>
-    <span id="status-url"></span>
-    <span id="status-hint"></span>
-    <span id="status-copied"></span>
-  </div>
-  <div id="palette-overlay" class="hidden">
-    <div id="palette">
-      <input id="palette-search" type="text" placeholder="Search..." autocomplete="off" spellcheck="false" />
-      <div id="palette-title"></div>
-      <ul id="palette-list"></ul>
+  <div id="empty-state" class="hidden">
+    <div class="empty-center">
+      <div class="wordmark"><span class="bye">bye</span>byenotes<span class="cursor-blink"></span></div>
+      <p class="tagline">Notes and code that live <b>entirely in the URL</b>.<br />
+        No accounts, no servers — <a id="example-link" href="#">see an example →</a></p>
+      <div class="hint-cards">
+        <div class="hint-card" data-hint="palette">
+          <kbd>/</kbd>
+          <div class="h">Command palette</div>
+          <div class="d">Everything is a command.</div>
+        </div>
+        <div class="hint-card" data-hint="box">
+          <kbd>/box</kbd>
+          <div class="h">Code blocks</div>
+          <div class="d">9 languages, highlighted.</div>
+        </div>
+        <div class="hint-card" data-hint="share">
+          <kbd>⌘⇧C</kbd>
+          <div class="h">Share the link</div>
+          <div class="d">Note compresses into the URL.</div>
+        </div>
+        <div class="hint-card" data-hint="focus">
+          <kbd>/focus</kbd>
+          <div class="h">Focus mode</div>
+          <div class="d">One block, zero noise.</div>
+        </div>
+      </div>
+      <div id="recent-section" class="recent hidden">
+        <div class="rc-title">recent notes</div>
+        <div id="recent-list"></div>
+      </div>
     </div>
   </div>
+
+  <div id="document-container"></div>
+
+  <div id="status">
+    <span id="status-mode" class="seg mode">ready</span>
+    <span id="status-lang" class="seg"></span>
+    <span id="status-font" class="seg"></span>
+    <span class="spacer"></span>
+    <span id="status-copied"></span>
+    <span id="status-url" class="seg" title="url capacity — click to share">
+      <span class="bar"><i id="status-url-fill"></i></span>
+      <span id="status-url-text">0.0k</span>
+    </span>
+    <span id="status-hint" class="seg"></span>
+  </div>
+
+  <button id="fab" title="commands">/</button>
+
+  <div id="palette-overlay" class="hidden">
+    <div id="palette">
+      <div id="palette-search-row">
+        <span class="slash">/</span>
+        <input id="palette-search" type="text" placeholder="search..." autocomplete="off" spellcheck="false" />
+      </div>
+      <div id="palette-title"></div>
+      <ul id="palette-list"></ul>
+      <div id="palette-foot">
+        <span><b>↑↓</b> navigate</span>
+        <span><b>↵</b> select</span>
+        <span><b>esc</b> back</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="share-overlay" class="hidden">
+    <div id="share-card">
+      <div class="share-head"><span class="t">share this note</span><span class="esc">esc</span></div>
+      <div class="share-body">
+        <div id="share-qr"></div>
+        <div class="share-right">
+          <div id="share-link"></div>
+          <div class="share-actions">
+            <button id="share-copy" class="btn primary">copy link</button>
+            <button id="share-copy-md" class="btn ghost">copy markdown</button>
+          </div>
+          <div class="capacity">
+            <div class="cap-row"><b>url capacity</b><span id="cap-text"></span></div>
+            <div class="cap-bar"><i id="cap-fill"></i></div>
+          </div>
+        </div>
+      </div>
+      <div class="share-foot"><span class="ico">✓</span><span>&nbsp;&nbsp;nothing leaves your browser — the link <i>is</i> the note</span></div>
+    </div>
+  </div>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="https://unpkg.com/html-docx-js/dist/html-docx.js"></script>
   <script src="app.js"></script>
 </body>

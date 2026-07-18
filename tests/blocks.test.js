@@ -32,10 +32,16 @@ test('buildBlockEl returns div with block-content', () => {
   expect(el.querySelector('.block-content')).not.toBeNull();
 });
 
-test('buildBlockEl code block has hljs-layer and label', () => {
+test('buildBlockEl code block has hljs-layer and language badge', () => {
   const b = mod.createBlock('code', 'python');
   const el = mod.buildBlockEl(b);
   expect(el.classList.contains('code-block')).toBe(true);
   expect(el.querySelector('.hljs-layer')).not.toBeNull();
-  expect(el.querySelector('.code-block-label').textContent).toBe('python');
+  expect(el.querySelector('.lang-badge').textContent).toContain('python');
+});
+
+test('buildBlockEl text block has markdown layer', () => {
+  const b = mod.createBlock('text');
+  const el = mod.buildBlockEl(b);
+  expect(el.querySelector('.md-layer')).not.toBeNull();
 });

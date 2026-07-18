@@ -9,8 +9,14 @@ Your blocks, font, and theme are compressed with [LZ-String](https://github.com/
 ## Features
 
 - **Block-based editor** — mix text blocks and syntax-highlighted code blocks freely
+- **Live markdown** — headings, lists, checkboxes, bold/italic, inline code render as you write; markers stay dimly visible
 - **Syntax highlighting** — Python, JavaScript, TypeScript, SQL, Bash, JSON, YAML, Go, Rust via highlight.js
-- **Command palette** — type `/` to open from anywhere, search and pick any command
+- **Command palette** — `/` in an empty block inserts at the caret; `⌘K` opens global commands
+- **Share panel** — `⌘⇧C` copies the link and shows a QR code (scan → note opens on your phone) plus a URL-capacity gauge
+- **Recent notes** — your last notes are kept in localStorage and listed on the start screen; the URL also auto-syncs as you type, so refreshing never loses work
+- **Focus mode** — `/focus` or `⌘.` dims everything but the block you're writing
+- **Hover controls** — move, delete, and add blocks with the hover gutter; code blocks get a header with language badge, line count, and copy
+- **Mobile editing** — floating `/` button, bottom-sheet palette, tap-to-select block toolbar
 - **7 themes** — Monokai, GitHub Dark, Nord, Solarized Light, Dracula, One Dark, Tokyo Night
 - **5 monospace fonts** — JetBrains Mono, Fira Code, Source Code Pro, IBM Plex Mono, Roboto Mono
 - **Auto-closing brackets** — `(`, `[`, `{`, `'`, `"` auto-close in code blocks
@@ -24,15 +30,17 @@ Your blocks, font, and theme are compressed with [LZ-String](https://github.com/
 
 | Shortcut | Action |
 |----------|--------|
-| `/` | Open command palette (works even with no block focused) |
-| `Ctrl+Shift+C` / `Cmd+Shift+C` | Copy shareable link |
+| `/` | In an empty block: insert palette at the caret. Elsewhere it just types `/` |
+| `Ctrl+K` / `Cmd+K` | Open command palette from anywhere |
+| `Ctrl+Shift+C` / `Cmd+Shift+C` | Copy link + open share panel (QR, capacity) |
+| `Ctrl+.` / `Cmd+.` | Toggle focus mode |
 | `Shift+Enter` | Exit code block (focus next block) |
 | `Tab` | Insert 4 spaces |
 | `Ctrl+Shift+↑` / `Cmd+Shift+↑` | Move block up |
 | `Ctrl+Shift+↓` / `Cmd+Shift+↓` | Move block down |
 | `↑ / ↓` | Navigate palette |
 | `Enter` | Confirm palette selection |
-| `Escape` | Close palette (or go back one level) |
+| `Escape` | Close palette / share panel / focus mode |
 
 ## Commands
 
@@ -41,6 +49,8 @@ Type `/` to open the palette, then search or pick:
 | Command | Action |
 |---------|--------|
 | `/box` | Insert a code block (choose language) |
+| `/share` | Open the share panel — link, QR code, URL capacity |
+| `/focus` | Toggle distraction-free focus mode |
 | `/font` | Switch font — active font marked `current` |
 | `/theme` | Switch theme — active theme marked `current` |
 | `/delete` | Delete the current block |
