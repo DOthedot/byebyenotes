@@ -116,6 +116,11 @@ function renderMarkdown(text) {
       anyMd = true;
       return '<div class="md-divider"></div>';
     }
+    if ((m = line.match(/^!\[([^\]]*?)(?:\|(\d{2,4}))?(?:\|(left|center|right))?\]\((https?:\/\/\S+)\)\s*$/))) {
+      anyMd = true;
+      const width = m[2] ? ` style="width:${m[2]}px"` : '';
+      return `<div class="md-img ${m[3] || 'left'}"><img src="${escapeHtml(m[4])}" alt="${escapeHtml(m[1])}" loading="lazy"${width}></div>`;
+    }
     if ((m = line.match(/^- \[([ xX])\] (.*)$/))) {
       anyMd = true;
       const done = m[1] !== ' ';
@@ -1698,8 +1703,14 @@ function attachEvents() {
     const content = e.target.closest('.block-content');
     if (!content) return;
     e.preventDefault();
-    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
-    if (text) document.execCommand('insertText', false, text);
+    let text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    if (!text) return;
+    // A bare image URL pasted into a text block becomes a markdown image
+    const block = getBlockData(getBlockIdFromEl(content));
+    if (block?.type === 'text' && /^https?:\/\/\S+\.(png|jpe?g|gif|webp|svg)(\?\S*)?$/i.test(text.trim())) {
+      text = `![image](${text.trim()})`;
+    }
+    document.execCommand('insertText', false, text);
   });
 
   docContainer.addEventListener('input', (e) => {

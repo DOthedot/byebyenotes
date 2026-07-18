@@ -293,6 +293,19 @@ button { font-family: inherit; }
 .md-check .cb:hover { border-color: var(--accent); }
 .md-check.done .cb { background: var(--accent-soft); border-color: var(--accent-line); }
 .md-check.done { color: var(--fg-faint); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--fg) 25%, transparent); }
+.md-img {
+  display: flex;
+  padding: 4px 0;
+}
+.md-img.left   { justify-content: flex-start; }
+.md-img.center { justify-content: center; }
+.md-img.right  { justify-content: flex-end; }
+.md-img img {
+  max-width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-soft);
+}
+
 .md-code {
   background: var(--bg-code);
   border: 1px solid var(--border-soft);

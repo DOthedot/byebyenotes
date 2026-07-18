@@ -10,6 +10,7 @@ Your blocks, font, and theme are compressed with [LZ-String](https://github.com/
 
 - **Block-based editor** — mix text blocks and syntax-highlighted code blocks freely
 - **Live markdown** — headings, lists, checkboxes, bold/italic, inline code render as you write; markers stay dimly visible
+- **Images by link** — `![alt](https://…/pic.png)` renders the image; add `|width` and `|left/center/right` to size and place it (e.g. `![pic|400|center](url)`). Pasting a bare image URL wraps it automatically. Only the link is stored — image files can't fit in a URL
 - **Syntax highlighting** — Python, JavaScript, TypeScript, SQL, Bash, JSON, YAML, Go, Rust via highlight.js
 - **Command palette** — `/` in an empty block inserts at the caret; `⌘K` opens global commands
 - **Share panel** — `⌘⇧C` copies the link and shows a QR code (scan → note opens on your phone) plus a URL-capacity gauge

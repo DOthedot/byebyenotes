@@ -48,6 +48,19 @@ test('checkbox lines carry their source line index', () => {
   expect(html).toContain('data-line="2"');
 });
 
+test('markdown images render with width and alignment', () => {
+  const plain = renderMarkdown('![pic](https://x.com/a.png)');
+  expect(plain).toContain('<img src="https://x.com/a.png"');
+  expect(plain).toContain('md-img left');
+
+  const sized = renderMarkdown('![pic|400|center](https://x.com/a.png)');
+  expect(sized).toContain('width:400px');
+  expect(sized).toContain('md-img center');
+
+  // Non-http(s) sources never render as images
+  expect(renderMarkdown('![x](javascript:alert(1))')).not.toContain('<img');
+});
+
 // ── toggleCheckboxLine ──
 test('toggleCheckboxLine flips unchecked to checked and back', () => {
   const src = '- [ ] task\n- [x] other';
