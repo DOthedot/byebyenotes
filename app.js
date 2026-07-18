@@ -1172,7 +1172,7 @@ function attachEvents() {
       if (hint === 'share')   { openShare(); return; }
       if (hint === 'focus')   { dissolveEmptyState(); focusBlock(blocks[0].id, false); toggleFocus(); return; }
     }
-    if (e.target.closest('#example-link') || e.target.closest('.recent-item')) return;
+    if (e.target.closest('#example-link') || e.target.closest('.recent-item') || e.target.closest('.creator-credit')) return;
     focusBlock(blocks[0].id, false);
   });
 

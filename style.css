@@ -595,6 +595,20 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
 .recent-item .ri-langs b { color: var(--accent); font-weight: 400; }
 .recent-item .ri-time { margin-left: auto; font-size: 10.5px; color: var(--fg-faint); white-space: nowrap; }
 
+.creator-credit {
+  margin-top: 40px;
+  font-size: 11px;
+  color: var(--fg-faint);
+  letter-spacing: 0.04em;
+}
+.creator-credit a {
+  color: var(--fg-dim);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--border);
+  transition: color 0.15s, border-color 0.15s;
+}
+.creator-credit a:hover { color: var(--accent); border-color: var(--accent-line); }
+
 /* ── Command palette ───────────────────────────────── */
 #palette-overlay {
   position: fixed;
