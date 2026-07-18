@@ -362,6 +362,16 @@ button { font-family: inherit; }
   color: var(--accent);
 }
 strong { color: color-mix(in srgb, var(--fg) 92%, white); }
+.md-layer del { color: var(--fg-faint); }
+.md-layer mark, .cmd-ico.hl-yellow, .cmd-ico.hl-green, .cmd-ico.hl-red, .cmd-ico.hl-blue {
+  color: inherit;
+  padding: 0 3px;
+  border-radius: 3px;
+}
+.hl-yellow { background: color-mix(in srgb, #e5c07b 30%, transparent) !important; }
+.hl-green  { background: color-mix(in srgb, #4ec94e 25%, transparent) !important; }
+.hl-red    { background: color-mix(in srgb, #e06c75 30%, transparent) !important; }
+.hl-blue   { background: color-mix(in srgb, #61afef 30%, transparent) !important; }
 
 /* ── Code block ────────────────────────────────────── */
 .code-block {

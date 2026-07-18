@@ -50,6 +50,7 @@ let paletteIndex = 0;
 let paletteAnchor = null;       // {x, y} viewport coords for caret-anchored palette
 let changeLangTarget = null;    // block id whose language is being changed
 let folderTarget     = null;    // snapshot nid being filed into a folder
+let formatRange      = null;    // saved text selection while the format palette is open
 const collapsedFolders = new Set();
 let copiedTimer  = null;
 let saveBeforeNew  = true;
@@ -95,6 +96,8 @@ function escapeHtml(s) {
 function renderInlineMd(escaped) {
   return escaped
     .replace(/`([^`]+)`/g, '<code class="md-code">$1</code>')
+    .replace(/~~([^~]+)~~/g, '<del>$1</del>')
+    .replace(/==(?:(yellow|green|red|blue):)?([^=]+)==/g, (mm, c, t) => `<mark class="hl-${c || 'yellow'}">${t}</mark>`)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
 }
@@ -603,6 +606,30 @@ function buildCommandList() {
   ];
 }
 
+const FORMAT_MARKERS = {
+  'bold':      ['**', '**'],
+  'italic':    ['*', '*'],
+  'strike':    ['~~', '~~'],
+  'code':      ['`', '`'],
+  'hl-yellow': ['==', '=='],
+  'hl-green':  ['==green:', '=='],
+  'hl-red':    ['==red:', '=='],
+  'hl-blue':   ['==blue:', '=='],
+};
+
+function buildFormatList() {
+  return [
+    { id: 'bold',      label: 'bold',          ico: 'B', desc: '**text**' },
+    { id: 'italic',    label: 'italic',        ico: 'I', desc: '*text*' },
+    { id: 'strike',    label: 'strikethrough', ico: 'S', desc: '~~text~~' },
+    { id: 'code',      label: 'inline code',   ico: '`', desc: '`text`' },
+    { id: 'hl-yellow', label: 'highlight',     ico: '▮', icoClass: 'hl-yellow' },
+    { id: 'hl-green',  label: 'highlight green', ico: '▮', icoClass: 'hl-green' },
+    { id: 'hl-red',    label: 'highlight red',   ico: '▮', icoClass: 'hl-red' },
+    { id: 'hl-blue',   label: 'highlight blue',  ico: '▮', icoClass: 'hl-blue' },
+  ];
+}
+
 function buildInsertList() {
   return [
     { id: 'code',      label: 'code block', ico: '▣', desc: 'python, sql, js...' },
@@ -650,6 +677,9 @@ function openPalette(mode, opts = {}) {
   } else if (mode === 'insert') {
     paletteTitle.textContent = 'Insert';
     paletteItems = buildInsertList();
+  } else if (mode === 'format') {
+    paletteTitle.textContent = 'Format selection';
+    paletteItems = buildFormatList();
   } else if (mode === 'lang' || mode === 'changeLang') {
     paletteTitle.textContent = 'Language';
     paletteItems = LANGS.map(l => ({ id: l, label: l }));
@@ -723,6 +753,7 @@ function renderPaletteList(items) {
 
     const ico = document.createElement('span');
     ico.className = 'cmd-ico';
+    if (item.icoClass) ico.classList.add(item.icoClass);
     ico.textContent = item.ico || '·';
     li.appendChild(ico);
 
@@ -790,6 +821,7 @@ function closePalette() {
   paletteOverlay.classList.remove('preview');
   paletteEl.classList.remove('anchored');
   folderTarget = null;
+  formatRange = null;
   if (activeBlockId !== null && !emptyVisible) getContentEl(activeBlockId)?.focus();
   updateStatus();
 }
@@ -835,6 +867,20 @@ function confirmPalette() {
     }
     closePalette();
     enableSync(phrase);
+    return;
+  }
+
+  if (paletteMode === 'format') {
+    if (paletteFiltered.length === 0) return;
+    const markers = FORMAT_MARKERS[paletteFiltered[paletteIndex]?.id];
+    const range = formatRange;
+    closePalette();
+    if (markers && range) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand('insertText', false, markers[0] + range.toString() + markers[1]);
+    }
     return;
   }
 
@@ -1453,7 +1499,7 @@ function attachEvents() {
       confirmPalette();
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      if (paletteMode === 'command' || paletteMode === 'insert') {
+      if (paletteMode === 'command' || paletteMode === 'insert' || paletteMode === 'format') {
         closePalette();
       } else if (paletteMode === 'lang' && paletteAnchor) {
         openPalette('insert', { anchor: paletteAnchor });
@@ -1661,8 +1707,16 @@ function attachEvents() {
       return;
     }
 
-    // / in an empty block — insert palette at the caret; otherwise / just types
+    // / with selected text — format palette; / in an empty block — insert palette
     if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const sel = window.getSelection();
+      if (blockData.type === 'text' && sel && !sel.isCollapsed &&
+          sel.toString().trim() && content.contains(sel.anchorNode)) {
+        e.preventDefault();
+        formatRange = sel.getRangeAt(0).cloneRange();
+        openPalette('format', { anchor: caretPoint(content) });
+        return;
+      }
       if ((content.innerText || '').trim() === '') {
         e.preventDefault();
         openPalette('insert', { anchor: caretPoint(content) });

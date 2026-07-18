@@ -36,6 +36,13 @@ test('inline bold, italic, code render', () => {
   expect(renderMarkdown('a `code` c')).toContain('<code class="md-code">code</code>');
 });
 
+test('strikethrough and colored highlights render', () => {
+  expect(renderMarkdown('a ~~gone~~ c')).toContain('<del>gone</del>');
+  expect(renderMarkdown('a ==note== c')).toContain('<mark class="hl-yellow">note</mark>');
+  expect(renderMarkdown('a ==red:hot== c')).toContain('<mark class="hl-red">hot</mark>');
+  expect(renderMarkdown('a ==blue:cool== c')).toContain('<mark class="hl-blue">cool</mark>');
+});
+
 test('html in content is escaped', () => {
   const html = renderMarkdown('# <script>alert(1)</script>');
   expect(html).not.toContain('<script>');
