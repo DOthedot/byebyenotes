@@ -241,9 +241,9 @@ function loadPrefs() {
 
 function savePrefs() {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: currentTheme, font: currentFont }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: currentTheme, font: currentFont, t: Date.now() }));
   } catch (e) { /* fine */ }
-  schedulePush();
+  pushNow();   // prefs changes are rare and easily lost to the debounce — push at once
 }
 
 // ── Cross-device sync (passphrase → SHA-256 key → /api/sync KV blob) ──────────
@@ -261,25 +261,34 @@ async function syncPull() {
   if (!data) return;
   const merged = mergeRecents(loadSnapshots(), data.recents || []);
   try { localStorage.setItem(SNAP_KEY, JSON.stringify(merged)); } catch (e) {}
-  // Adopt remote prefs unless a shared note's own theme/font is on screen
-  if (data.prefs && !window.location.hash) {
-    if (THEMES.includes(data.prefs.theme)) applyTheme(data.prefs.theme);
-    if (FONTS.includes(data.prefs.font))   applyFont(data.prefs.font);
-    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: currentTheme, font: currentFont })); } catch (e) {}
+  // Adopt remote prefs only when they're newer than what this device has
+  const localPrefs = loadPrefs();
+  if (data.prefs && (data.prefs.t || 0) > (localPrefs.t || 0)) {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify(data.prefs)); } catch (e) {}
+    // Apply visually unless a note's own theme/font is on screen
+    if (!window.location.hash) {
+      if (THEMES.includes(data.prefs.theme)) applyTheme(data.prefs.theme);
+      if (FONTS.includes(data.prefs.font))   applyFont(data.prefs.font);
+    }
   }
   if (emptyVisible) renderRecent();
+}
+
+function pushNow() {
+  if (!syncKey) return;
+  clearTimeout(pushTimer);
+  fetch('/api/sync', {
+    method: 'PUT',
+    keepalive: true,   // survives tab close mid-request
+    headers: { 'x-sync-key': syncKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recents: loadSnapshots(), prefs: loadPrefs() }),
+  }).catch(() => {});
 }
 
 function schedulePush() {
   if (!syncKey) return;
   clearTimeout(pushTimer);
-  pushTimer = setTimeout(() => {
-    fetch('/api/sync', {
-      method: 'PUT',
-      headers: { 'x-sync-key': syncKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recents: loadSnapshots(), prefs: loadPrefs() }),
-    }).catch(() => {});
-  }, PUSH_DELAY);
+  pushTimer = setTimeout(pushNow, PUSH_DELAY);
 }
 
 async function enableSync(phrase) {
