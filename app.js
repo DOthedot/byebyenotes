@@ -546,6 +546,7 @@ function buildCommandList() {
     { id: 'export', label: '/export', ico: '⇩',  desc: 'md · pdf · docx · html' },
     { id: 'sync',   label: '/sync',   ico: '⟲',  desc: syncKey ? 'turn off cross-device sync' : 'sync notes across devices', hint: syncKey ? 'on' : null },
     { id: 'delete', label: '/delete', ico: '✕',  desc: 'delete current block' },
+    { id: 'home',    label: '/home',    ico: '⌂', desc: 'back to the start screen' },
     { id: 'newNote', label: '/newNote', ico: '✚', desc: 'start a fresh note' },
     { id: 'saveBeforeNew', label: '/save_before_new', ico: '⋯', desc: 'save before new note', hint: saveBeforeNew ? 'on' : 'off' },
   ];
@@ -788,6 +789,14 @@ function confirmPalette() {
     if (selected.id === 'sync') {
       if (syncKey) { closePalette(); disableSync(); }
       else openPalette('syncPhrase');
+      return;
+    }
+    if (selected.id === 'home') {
+      closePalette();
+      syncNow();               // make sure the current note lands in recents
+      if (focusMode) toggleFocus();
+      newNote();
+      maybeShowEmptyState();
       return;
     }
     if (selected.id === 'newNote') {
