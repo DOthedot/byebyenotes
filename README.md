@@ -53,6 +53,7 @@ Type `/` to open the palette, then search or pick:
 | `/box` | Insert a code block (choose language) |
 | `/share` | Open the share panel — link, QR code, URL capacity |
 | `/sync` | Cross-device sync via passphrase (again to turn off) |
+| `/home` | Back to the start screen (current note saved to recents) |
 | `/focus` | Toggle distraction-free focus mode |
 | `/font` | Switch font — active font marked `current` |
 | `/theme` | Switch theme — active theme marked `current` |
