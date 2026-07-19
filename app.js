@@ -617,6 +617,20 @@ const FORMAT_MARKERS = {
   'hl-blue':   ['==blue:', '=='],
 };
 
+// Remove existing markers of the same category from a selection before re-wrapping,
+// so re-formatting a region makes it uniform instead of nesting broken markers.
+// Aggressive on highlights so re-highlighting also repairs a previously-broken run.
+function stripFormatting(s, id) {
+  if (id && id.startsWith('hl-')) {
+    return s.replace(/==(?:yellow|green|red|blue):/g, '==').replace(/==/g, '');
+  }
+  if (id === 'bold')   return s.replace(/\*\*/g, '');
+  if (id === 'italic') return s.replace(/(?<!\*)\*(?!\*)/g, '');
+  if (id === 'strike') return s.replace(/~~/g, '');
+  if (id === 'code')   return s.replace(/`/g, '');
+  return s;
+}
+
 function buildFormatList() {
   return [
     { id: 'bold',      label: 'bold',          ico: 'B', desc: '**text**' },
@@ -872,7 +886,8 @@ function confirmPalette() {
 
   if (paletteMode === 'format') {
     if (paletteFiltered.length === 0) return;
-    const markers = FORMAT_MARKERS[paletteFiltered[paletteIndex]?.id];
+    const id = paletteFiltered[paletteIndex]?.id;
+    const markers = FORMAT_MARKERS[id];
     const fs = formatSel;
     closePalette();
     if (markers && fs && fs.range) {
@@ -887,7 +902,9 @@ function confirmPalette() {
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(fs.range);
-        document.execCommand('insertText', false, markers[0] + fs.range.toString() + markers[1]);
+        // Strip same-category markers first so re-formatting a region is uniform, not nested
+        const cleaned = stripFormatting(fs.range.toString(), id);
+        document.execCommand('insertText', false, markers[0] + cleaned + markers[1]);
       }
     }
     return;
@@ -2041,6 +2058,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
-    capacityLevel, timeAgo, mergeRecents, groupByFolder,
+    capacityLevel, timeAgo, mergeRecents, groupByFolder, stripFormatting,
   };
 }

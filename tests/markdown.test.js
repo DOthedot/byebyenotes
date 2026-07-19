@@ -5,7 +5,30 @@ global.LZString = {
 
 const {
   renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle, capacityLevel, timeAgo,
+  stripFormatting,
 } = require('../app.js');
+
+describe('stripFormatting (re-format makes a region uniform)', () => {
+  test('strips existing highlights so re-highlighting is uniform', () => {
+    const s = '==green:quick== brown ==red:fox==';
+    expect(stripFormatting(s, 'hl-blue')).toBe('quick brown fox');
+  });
+  test('repairs a broken nested-highlight run', () => {
+    const s = '==red:==green:==These are phy==siological==== end';
+    // no dangling == left after stripping
+    expect(stripFormatting(s, 'hl-yellow')).not.toContain('==');
+    expect(stripFormatting(s, 'hl-yellow')).toContain('These are physiological');
+  });
+  test('bold strips only bold markers, leaves highlights', () => {
+    expect(stripFormatting('a **b** ==red:c==', 'bold')).toBe('a b ==red:c==');
+  });
+  test('italic strips lone asterisks but not bold', () => {
+    expect(stripFormatting('*a* and **b**', 'italic')).toBe('a and **b**');
+  });
+  test('plain text is untouched', () => {
+    expect(stripFormatting('nothing here', 'hl-green')).toBe('nothing here');
+  });
+});
 
 // ── renderMarkdown ──
 test('plain text renders nothing (no markdown layer needed)', () => {
