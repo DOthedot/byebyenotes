@@ -57,13 +57,34 @@ whole codebase.
 
 ## Output
 
-Write the full report to `.claude/reviews/latest.md` (overwrite it) using the format
-below, then return to the caller: the **verdict**, the count of findings by severity, and
-— verbatim — any items in the "Questions for the user" section.
+A `PreToolUse` hook (`.claude/hooks/pre-commit-review-gate.sh`) blocks `git commit`
+whenever app.js, style.css, index.html, or api/** differ from `HEAD`, unless this exact
+report approves the *current* diff. It matches your report against the live diff by
+content hash, so the marker line below must be computed exactly as shown — do not
+paraphrase it.
+
+Before writing the report, from the repo root, run:
+
+```bash
+git diff HEAD -- app.js style.css index.html api | shasum -a 256 | awk '{print $1}'
+```
+
+That hash — call it `<hash>` below — goes into the marker regardless of whether the
+broader diff you were asked to review is larger (e.g. also touches tests/README); the
+hook only ever gates those four paths.
+
+Map your verdict to exactly one token: `APPROVE`, `APPROVE_WITH_NITS`, or
+`CHANGES_REQUESTED` (underscores, no spaces — this is what the hook parses).
+
+Write the full report to `.claude/reviews/latest.md` (overwrite it), **with the marker
+as the very first line**, using the format below. Then return to the caller: the
+**verdict**, the count of findings by severity, and — verbatim — any items in the
+"Questions for the user" section.
 
 Report format:
 
 ```markdown
+<!-- bbn-review: sha256=<hash> verdict=<APPROVE|APPROVE_WITH_NITS|CHANGES_REQUESTED> -->
 # Code review — <date/time>
 
 **Verdict:** APPROVE | APPROVE WITH NITS | CHANGES REQUESTED
@@ -103,3 +124,6 @@ question and 2–4 concrete options (mark one recommended). If there are none, w
 - You cannot prompt the user directly. Put anything needing their input in the
   "Questions for the user" section; the calling agent will ask them.
 - Prefer fewer, higher-confidence findings over a long list of speculation.
+- Get the marker line exactly right — wrong hash command, wrong path order, or a
+  paraphrased token (`CHANGES REQUESTED` instead of `CHANGES_REQUESTED`) makes the
+  hook treat the report as stale/invalid and block the commit anyway.

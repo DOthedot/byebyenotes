@@ -3,7 +3,9 @@ node_modules/
 .playwright-mcp/
 docs/
 
-# Ignore local Claude state, but share the project subagents
+# Ignore local Claude state, but share the project subagents/hooks/settings
 .claude/*
 !.claude/agents/
+!.claude/hooks/
+!.claude/settings.json
 .claude/reviews/

@@ -76,23 +76,33 @@ Definition of done for a change:
 3. For `/api` / KV changes, round-trip against production with `curl` after deploy.
 4. Match existing code style. Keep logic in `app.js`; keep it a single file.
 
-## Pre-commit review (required for non-trivial changes)
+## Pre-commit review (enforced by a hook)
 
-Before committing and pushing anything beyond a trivial edit, invoke the
-**`code-reviewer`** subagent (`.claude/agents/code-reviewer.md`) on the working diff.
+A `PreToolUse` hook (`.claude/hooks/pre-commit-review-gate.sh`, wired in
+`.claude/settings.json`) **blocks `git commit`** whenever `app.js`, `style.css`,
+`index.html`, or `api/**` differ from `HEAD`, unless `.claude/reviews/latest.md`
+contains a fresh **`code-reviewer`** approval for the exact current diff (matched by
+content hash — see the marker line the agent writes). This is not just a convention:
+the commit will actually fail with a deny reason until the gate is satisfied.
 
 Workflow:
 1. Finish the change and run `npx jest`.
-2. Dispatch the `code-reviewer` agent (tell it the diff to review; default is the
-   uncommitted working changes).
-3. It writes a full report to `.claude/reviews/latest.md` and returns a verdict plus any
+2. Dispatch the **`code-reviewer`** subagent (`.claude/agents/code-reviewer.md`) on the
+   working diff.
+3. It writes the report (with the required marker line) and returns a verdict plus any
    "Questions for the user."
 4. If it returns questions, **ask the user** with `AskUserQuestion` (single or
    multi-select) before proceeding — do not guess on decisions it flagged as theirs.
-5. Fix any 🔴 Blockers / 🟡 Important findings, then commit and push.
+5. Fix any 🔴 Blockers / 🟡 Important findings and re-run the review — the hook checks
+   the diff's hash, so any further edit invalidates a prior approval.
+6. Commit and push. If the diff doesn't touch the gated files (e.g. docs/tests only),
+   the hook is a no-op.
 
-`.claude/reviews/` is gitignored (ephemeral, per-machine). The agent config itself is
-tracked so the whole team/every session shares the same review standard.
+Emergency bypass: include `BBN_SKIP_REVIEW=1` anywhere in the commit command (e.g.
+`BBN_SKIP_REVIEW=1 git commit -m "hotfix"`). Use sparingly and explain why to the user.
+
+`.claude/reviews/` is gitignored (ephemeral, per-machine). The agent config and hook
+script are tracked so the whole team/every session shares the same gate.
 
 ## Commit conventions
 
