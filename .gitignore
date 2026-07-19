@@ -1,5 +1,9 @@
 .worktrees/
 node_modules/
-.claude/
 .playwright-mcp/
 docs/
+
+# Ignore local Claude state, but share the project subagents
+.claude/*
+!.claude/agents/
+.claude/reviews/

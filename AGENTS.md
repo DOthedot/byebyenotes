@@ -76,6 +76,24 @@ Definition of done for a change:
 3. For `/api` / KV changes, round-trip against production with `curl` after deploy.
 4. Match existing code style. Keep logic in `app.js`; keep it a single file.
 
+## Pre-commit review (required for non-trivial changes)
+
+Before committing and pushing anything beyond a trivial edit, invoke the
+**`code-reviewer`** subagent (`.claude/agents/code-reviewer.md`) on the working diff.
+
+Workflow:
+1. Finish the change and run `npx jest`.
+2. Dispatch the `code-reviewer` agent (tell it the diff to review; default is the
+   uncommitted working changes).
+3. It writes a full report to `.claude/reviews/latest.md` and returns a verdict plus any
+   "Questions for the user."
+4. If it returns questions, **ask the user** with `AskUserQuestion` (single or
+   multi-select) before proceeding — do not guess on decisions it flagged as theirs.
+5. Fix any 🔴 Blockers / 🟡 Important findings, then commit and push.
+
+`.claude/reviews/` is gitignored (ephemeral, per-machine). The agent config itself is
+tracked so the whole team/every session shares the same review standard.
+
 ## Commit conventions
 
 - Small, focused commits with a clear subject line and a body explaining the *why*
