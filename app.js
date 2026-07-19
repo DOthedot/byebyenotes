@@ -1751,7 +1751,11 @@ function attachEvents() {
       return;
     }
 
-    // / with selected text — format palette; / in an empty block — insert palette
+    // / behavior in a block:
+    //  - text block with a selection → format palette
+    //  - text block, caret at a word boundary (start of line or after a space) → insert palette
+    //  - text block mid-word → literal slash (so "and/or" works)
+    //  - code block → always literal slash (comments, paths, division, regex)
     if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const sel = window.getSelection();
       if (blockData.type === 'text' && sel && !sel.isCollapsed &&
@@ -1761,12 +1765,21 @@ function attachEvents() {
         openPalette('format', { anchor: caretPoint(content) });
         return;
       }
-      if ((content.innerText || '').trim() === '') {
-        e.preventDefault();
-        openPalette('insert', { anchor: caretPoint(content) });
-        return;
+      if (blockData.type === 'text') {
+        let before = '';
+        if (sel && sel.rangeCount && sel.getRangeAt(0).collapsed) {
+          const r = sel.getRangeAt(0);
+          if (r.startContainer.nodeType === Node.TEXT_NODE) {
+            before = r.startOffset > 0 ? r.startContainer.textContent[r.startOffset - 1] : '';
+          }
+        }
+        if (before === '' || /\s/.test(before)) {
+          e.preventDefault();
+          openPalette('insert', { anchor: caretPoint(content) });
+          return;
+        }
       }
-      // fall through: literal slash (finally typeable in code!)
+      // fall through: literal slash
     }
 
     // Auto-closing pairs in code blocks
