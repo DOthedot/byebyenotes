@@ -50,7 +50,7 @@ let paletteIndex = 0;
 let paletteAnchor = null;       // {x, y} viewport coords for caret-anchored palette
 let changeLangTarget = null;    // block id whose language is being changed
 let folderTarget     = null;    // snapshot nid being filed into a folder
-let formatRange      = null;    // saved text selection while the format palette is open
+let formatSel        = null;    // { blockId, range } saved while the format palette is open
 const collapsedFolders = new Set();
 let copiedTimer  = null;
 let saveBeforeNew  = true;
@@ -821,7 +821,7 @@ function closePalette() {
   paletteOverlay.classList.remove('preview');
   paletteEl.classList.remove('anchored');
   folderTarget = null;
-  formatRange = null;
+  formatSel = null;
   if (activeBlockId !== null && !emptyVisible) getContentEl(activeBlockId)?.focus();
   updateStatus();
 }
@@ -873,13 +873,22 @@ function confirmPalette() {
   if (paletteMode === 'format') {
     if (paletteFiltered.length === 0) return;
     const markers = FORMAT_MARKERS[paletteFiltered[paletteIndex]?.id];
-    const range = formatRange;
+    const fs = formatSel;
     closePalette();
-    if (markers && range) {
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      document.execCommand('insertText', false, markers[0] + range.toString() + markers[1]);
+    if (markers && fs && fs.range) {
+      // A block that already has markdown hides its editable layer when blurred;
+      // re-show and focus it before restoring the selection, or execCommand no-ops.
+      const blockEl = getBlockEl(fs.blockId);
+      const el = getContentEl(fs.blockId);
+      if (blockEl && el) {
+        activeBlockId = fs.blockId;
+        blockEl.classList.add('active', 'editing');
+        el.focus();
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(fs.range);
+        document.execCommand('insertText', false, markers[0] + fs.range.toString() + markers[1]);
+      }
     }
     return;
   }
@@ -1731,7 +1740,7 @@ function attachEvents() {
       if (blockData.type === 'text' && sel && !sel.isCollapsed &&
           sel.toString().trim() && content.contains(sel.anchorNode)) {
         e.preventDefault();
-        formatRange = sel.getRangeAt(0).cloneRange();
+        formatSel = { blockId, range: sel.getRangeAt(0).cloneRange() };
         openPalette('format', { anchor: caretPoint(content) });
         return;
       }
