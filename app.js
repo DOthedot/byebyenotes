@@ -1997,6 +1997,15 @@ function loadState() {
     currentFont  = FONTS.includes(state.font)   ? state.font  : 'jetbrains-mono';
     currentTheme = THEMES.includes(state.theme) ? state.theme : 'monokai';
     noteId = typeof state.nid === 'string' ? state.nid : Math.random().toString(36).slice(2, 10);
+    // A note you've already made yours (it's in your own local/synced recents)
+    // should look like your other notes — your current theme/font wins over
+    // whatever was saved with it. A note you've never touched before (e.g. a
+    // link someone else shared) still opens in the sender's chosen presentation.
+    if (loadSnapshots().some(s => s.nid === noteId)) {
+      const prefs = loadPrefs();
+      if (THEMES.includes(prefs.theme)) currentTheme = prefs.theme;
+      if (FONTS.includes(prefs.font))   currentFont  = prefs.font;
+    }
     nextId = 0;
     blocks = state.blocks.map(b => {
       const block = createBlock(b.type, b.lang);
