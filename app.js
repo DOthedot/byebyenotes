@@ -1470,10 +1470,17 @@ function attachEvents() {
       return;
     }
 
-    // / with no block focused — command palette
+    // / with no block focused — focus a block and open the same caret palette
+    // as in-block, so / is always the inline insert/format menu (never bottom-left)
     if (e.key === '/' && !e.target.closest('.block-content') && e.target !== paletteSearch) {
       e.preventDefault();
-      openPalette('command');
+      const id = (activeBlockId !== null && getBlockEl(activeBlockId)) ? activeBlockId : blocks[0]?.id;
+      if (id !== undefined && id !== null) {
+        focusBlock(id, true);
+        openPalette('insert', { anchor: caretPoint(getContentEl(id)) });
+      } else {
+        openPalette('command');
+      }
     }
   });
 
@@ -1538,6 +1545,17 @@ function attachEvents() {
   });
 
   // ── Empty state ──
+  // Keep the underlying block focused when clicking neutral areas, so typing
+  // always registers and / always resolves the same way.
+  const EMPTY_INTERACTIVE = '.hint-card, #example-link, .recent-item, .recent-folder, .ri-folder, .ri-del, .creator-credit, a, button';
+  emptyState.addEventListener('mousedown', (e) => {
+    if (e.target.closest(EMPTY_INTERACTIVE)) return;
+    e.preventDefault();   // don't blur the focused block
+    if (activeBlockId === null || !getBlockEl(activeBlockId)) {
+      if (blocks[0]) focusBlock(blocks[0].id, false);
+    }
+  });
+
   emptyState.addEventListener('click', (e) => {
     const card = e.target.closest('.hint-card');
     if (card) {
