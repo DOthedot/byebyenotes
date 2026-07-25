@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 4 files, **33 tests** — state 4 · blocks 5 · markdown 19 · sync 5 (all green).
+- **Suite:** 5 files, **38 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 (all green).
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -46,10 +46,13 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `stripFormatting` | `markdown.test.js` | Remove one format category's markers from a region. |
 | `mergeRecents` | `sync.test.js` | Merge local + remote recent-note snapshots. |
 | `groupByFolder` | `sync.test.js` | Split snapshots into loose notes + sorted folders. |
+| `nextNavIndex` | `home-nav.test.js` | Next Home-screen selection index for Arrow keys (wrap; `-1` = none). |
 
 Not yet unit-tested (browser/integration territory): palette/keyboard handling,
 `syncNow`/URL persistence, image paste + `/api/img`, sync round-trip + `/api/sync`,
-theme/font application, focus mode, export.
+theme/font application, focus mode, export. (The DOM wiring of Home-screen keyboard
+nav — row collection, `.kb-active`, Enter dispatch — is browser-verified; only its
+pure index math `nextNavIndex` is unit-tested here.)
 
 ---
 
@@ -158,6 +161,23 @@ helper building snapshots `{ nid, t, title, folder, blockCount, langs }` (`t` = 
 | `groupByFolder splits loose notes from sorted folders` | Foldered notes group under **alphabetically sorted** folder names (`['ideas','work']`); within a folder, notes keep newest-first order; un-foldered notes go to `loose`. | Drives the collapsible-folder start screen. |
 | `groupByFolder treats blank folder as loose` | A folder of `'  '` (whitespace) counts as no folder → both notes land in `loose`, `folders` empty. | Prevents phantom blank folders. |
 | `mergeRecents tolerates null/invalid input` | `mergeRecents(null, undefined) → []`; `[null, {}, snap('a',1)]` filters junk → `['a']`. | Corrupt localStorage / API payloads must never crash the start screen. |
+
+---
+
+## `home-nav.test.js` — Home-screen list navigation (5 tests)
+
+Covers `nextNavIndex(current, key, count)`, the pure index math behind arrow-key
+navigation of the start-screen recent-notes list. `current === -1` means nothing is
+selected; from there `ArrowDown` picks the first row and `ArrowUp` the last, and
+otherwise the selection wraps around the ends.
+
+| Test | Asserts | Why it matters |
+|------|---------|----------------|
+| empty list yields no selection | `count === 0` → `-1` for any key/current. | An empty recents list has nothing to highlight; never point at a phantom row. |
+| from no selection, Down picks first and Up picks last | `(-1,'ArrowDown',3)→0`; `(-1,'ArrowUp',3)→2`. | First keypress enters the list from the natural end. |
+| Down wraps past the end | `(0,'ArrowDown',3)→1`; `(2,'ArrowDown',3)→0`. | Moving down off the last row cycles back to the top. |
+| Up wraps past the top | `(1,'ArrowUp',3)→0`; `(0,'ArrowUp',3)→2`. | Moving up off the first row cycles to the bottom. |
+| unrelated keys leave the index unchanged | `(1,'Enter',3)→1`; `(1,'a',3)→1`. | Only Arrow keys move the selection; everything else is handled elsewhere. |
 
 ---
 

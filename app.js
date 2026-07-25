@@ -58,6 +58,7 @@ let pendingExport  = null;      // 'md' | 'pdf' | 'docx' | 'html' | 'newNote'
 let focusMode    = false;
 let shareOpen    = false;
 let emptyVisible = false;
+let homeNavIndex = -1;   // selected recent-row on the Home screen; -1 = none
 let syncTimer    = null;
 let lastUrlLen   = 0;
 let syncKey      = null;   // SHA-256(passphrase) hex — presence means cross-device sync is on
@@ -1198,8 +1199,40 @@ function maybeShowEmptyState() {
 function dissolveEmptyState() {
   if (!emptyVisible) return;
   emptyVisible = false;
+  clearHomeNav();
   emptyState.classList.add('dissolving');
   setTimeout(() => emptyState.classList.add('hidden'), 380);
+}
+
+// ── Home-screen keyboard navigation ───────────────────────────────────────────
+// Live list of keyboard-navigable Home rows (recent notes + folder headers), in
+// on-screen order. Collapsed folders hide their children, so those aren't listed.
+function homeNavRows() {
+  return Array.from(recentList.querySelectorAll('.recent-item, .recent-folder'));
+}
+
+function applyHomeNavHighlight() {
+  const rows = homeNavRows();
+  rows.forEach((el, i) => el.classList.toggle('kb-active', i === homeNavIndex));
+  if (homeNavIndex >= 0 && rows[homeNavIndex]) {
+    rows[homeNavIndex].scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function clearHomeNav() {
+  homeNavIndex = -1;
+  homeNavRows().forEach(el => el.classList.remove('kb-active'));
+}
+
+function moveHomeNav(key) {
+  homeNavIndex = nextNavIndex(homeNavIndex, key, homeNavRows().length);
+  applyHomeNavHighlight();
+}
+
+// Enter on the selected row: open a note, or toggle a folder — by reusing each
+// row's own click handler, so there's a single source of truth per row type.
+function activateHomeNav() {
+  homeNavRows()[homeNavIndex]?.click();
 }
 
 function makeRecentRow(s) {
@@ -1265,6 +1298,10 @@ function renderRecent() {
       });
     }
   });
+
+  // Rows were rebuilt: drop a now-out-of-range selection, else re-paint it.
+  if (homeNavIndex >= homeNavRows().length) homeNavIndex = -1;
+  applyHomeNavHighlight();
 }
 
 // Rewrite an image markdown line after a drag (place/tilt) or resize
@@ -1477,6 +1514,25 @@ function attachEvents() {
     }
 
     if (shareOpen || paletteOpen) return;
+
+    // Home-screen recent-list navigation (only while the empty state is up).
+    if (emptyVisible) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveHomeNav(e.key);
+        return;
+      }
+      if (homeNavIndex >= 0) {
+        if (e.key === 'Enter')  { e.preventDefault(); activateHomeNav(); return; }
+        if (e.key === 'Escape') { e.preventDefault(); clearHomeNav(); return; }
+        // While a row is selected, swallow printable keys so they don't leak into
+        // the focused block and dissolve the Home screen — browsing ≠ new note.
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          return;
+        }
+      }
+    }
 
     // Ctrl/Cmd+Shift+C — copy link + open share panel
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
@@ -2086,11 +2142,22 @@ document.addEventListener('DOMContentLoaded', () => {
   if (syncKey) syncPull().catch(() => {});
 });
 
+// Next selection index for the Home-screen recent list. current === -1 means
+// nothing selected; from there ArrowDown picks the first row and ArrowUp the last.
+// Otherwise the selection wraps around the ends. Unrelated keys leave it unchanged.
+function nextNavIndex(current, key, count) {
+  if (count <= 0) return -1;
+  if (key === 'ArrowDown') return current < 0 ? 0 : (current + 1) % count;
+  if (key === 'ArrowUp')   return current < 0 ? count - 1 : (current - 1 + count) % count;
+  return current;
+}
+
 // ── Export for tests (no-op in browser) ──────────────────────────────────────
 if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
     capacityLevel, timeAgo, mergeRecents, groupByFolder, stripFormatting,
+    nextNavIndex,
   };
 }
