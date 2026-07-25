@@ -39,8 +39,8 @@ Your blocks, font, and theme are compressed with [LZ-String](https://github.com/
 | `Ctrl+K` / `Cmd+K` | Open command palette from anywhere |
 | `Ctrl+Shift+C` / `Cmd+Shift+C` | Copy link + open share panel (QR, capacity) |
 | `Ctrl+.` / `Cmd+.` | Toggle focus mode |
-| `Enter` (text block) | New block below — unless you're in a list, which continues |
-| `Shift+Enter` (text block) | Line break inside the block |
+| `Enter` (text block) | Line break inside the block — unless you're in a list, which continues |
+| `Shift+Enter` (text block) | New block below |
 | `Shift+Enter` (code block) | Exit the code block (Enter makes newlines while coding) |
 | `Tab` | Insert 4 spaces |
 | `Ctrl+Shift+↑` / `Cmd+Shift+↑` | Move block up |

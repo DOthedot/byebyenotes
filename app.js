@@ -1817,7 +1817,8 @@ function attachEvents() {
       }
     }
 
-    // Enter in text block — continue lists inside the block, otherwise exit to a new block
+    // Enter in text block — stay in the block: continue lists, else insert a line break.
+    // (Shift+Enter exits to a new block — see below.)
     if (e.key === 'Enter' && !e.shiftKey && blockData.type === 'text') {
       const sel   = window.getSelection();
       const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
@@ -1841,17 +1842,9 @@ function attachEvents() {
           return;
         }
       }
-      // Not in a list: Enter leaves the block (Shift+Enter makes a line break inside)
+      // Not in a list: Enter is a plain line break inside the block
       e.preventDefault();
-      const nextBlock = blocks[blockIdx + 1];
-      if (nextBlock && blocks[blockIdx] && !(getBlockText(blocks[blockIdx]) || '').trim()) {
-        focusBlock(nextBlock.id, false);
-      } else {
-        const newText = createBlock('text');
-        insertBlockAfter(blockId, newText);
-        focusBlock(newText.id, false);
-        scheduleSync();
-      }
+      document.execCommand('insertText', false, '\n');
       return;
     }
 
@@ -1893,7 +1886,21 @@ function attachEvents() {
       return;
     }
 
-    // Shift+Enter in text block — plain line break inside the block (browser default)
+    // Shift+Enter in text block — exit to a new block (Enter now makes a line break)
+    if (e.key === 'Enter' && e.shiftKey && blockData.type === 'text') {
+      e.preventDefault();
+      const nextBlock = blocks[blockIdx + 1];
+      if (nextBlock && blocks[blockIdx] && !(getBlockText(blocks[blockIdx]) || '').trim()) {
+        focusBlock(nextBlock.id, false);
+      } else {
+        const newText = createBlock('text');
+        insertBlockAfter(blockId, newText);
+        focusBlock(newText.id, false);
+        scheduleSync();
+      }
+      return;
+    }
+
     // Shift+Enter in code block — exit to next block (Enter is taken by newline+indent)
     if (e.key === 'Enter' && e.shiftKey && blockData.type === 'code') {
       e.preventDefault();
