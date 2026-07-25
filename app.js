@@ -604,6 +604,7 @@ function buildCommandList() {
     { id: 'home',    label: '/home',    ico: '⌂', desc: 'back to the start screen' },
     { id: 'newNote', label: '/newNote', ico: '✚', desc: 'start a fresh note' },
     { id: 'saveBeforeNew', label: '/save_before_new', ico: '⋯', desc: 'save before new note', hint: saveBeforeNew ? 'on' : 'off' },
+    { id: 'help',   label: '/help',   ico: '?', desc: 'commands, shortcuts & formatting' },
   ];
 }
 
@@ -652,6 +653,42 @@ function buildInsertList() {
     { id: 'heading',   label: 'heading',    ico: '#', desc: '# title' },
     { id: 'divider',   label: 'divider',    ico: '—', desc: '---' },
     { id: 'commands',  label: 'all commands...', ico: '⌘' },
+    { id: 'help',      label: 'help', ico: '?', desc: 'commands, shortcuts & formatting' },
+  ];
+}
+
+// Read-only reference shown by /help. Headings ({ heading }) render as non-interactive
+// section dividers; every other row reuses the palette's icon/name/desc/kbd layout but
+// executes nothing. The COMMANDS section is generated from buildCommandList() so it can
+// never drift out of sync when commands are added or renamed.
+function buildHelpList() {
+  const commands = buildCommandList()
+    .filter(c => c.id !== 'help')
+    .map(c => ({ ico: c.ico, label: c.label, desc: c.desc }));
+
+  return [
+    { ico: '▚', label: 'byebyenotes', desc: 'a terminal-style notepad — your whole note lives in the URL, no account needed' },
+
+    { heading: 'COMMANDS' },
+    ...commands,
+
+    { heading: 'SHORTCUTS' },
+    { label: 'command palette',   kbd: '⌘K' },
+    { label: 'copy link + share', kbd: '⌘⇧C' },
+    { label: 'focus mode',        kbd: '⌘.' },
+    { label: 'insert / format menu', kbd: '/' },
+    { label: 'new line',          kbd: 'Enter' },
+    { label: 'exit block',        kbd: '⇧Enter' },
+
+    { heading: 'FORMATTING' },
+    { ico: 'B', label: 'bold',          desc: '**text**' },
+    { ico: 'I', label: 'italic',        desc: '*text*' },
+    { ico: 'S', label: 'strikethrough', desc: '~~text~~' },
+    { ico: '`', label: 'inline code',   desc: '`text`' },
+    { ico: '▮', label: 'highlight',     desc: '==text== (or ==red: ==green: ==blue:)' },
+    { ico: '#', label: 'heading',       desc: '# title' },
+    { ico: '☑', label: 'checklist',     desc: '- [ ] todo' },
+    { ico: '—', label: 'divider',       desc: '---' },
   ];
 }
 
@@ -689,6 +726,10 @@ function openPalette(mode, opts = {}) {
     paletteAnchor = null;
     paletteTitle.textContent = 'Commands';
     paletteItems = buildCommandList();
+  } else if (mode === 'help') {
+    paletteAnchor = null;
+    paletteTitle.textContent = 'Help';
+    paletteItems = buildHelpList();
   } else if (mode === 'insert') {
     paletteTitle.textContent = 'Insert';
     paletteItems = buildInsertList();
@@ -766,6 +807,14 @@ function renderPaletteList(items) {
   items.forEach((item, i) => {
     const li = document.createElement('li');
 
+    // /help section divider — a non-interactive label, no icon/desc/handler
+    if (item.heading) {
+      li.className = 'cmd-section';
+      li.textContent = item.heading;
+      paletteList.appendChild(li);
+      return;
+    }
+
     const ico = document.createElement('span');
     ico.className = 'cmd-ico';
     if (item.icoClass) ico.classList.add(item.icoClass);
@@ -805,7 +854,10 @@ function renderPaletteList(items) {
     }
     if (right.childNodes.length) li.appendChild(right);
 
-    li.addEventListener('mousedown', (e) => { e.preventDefault(); paletteIndex = i; confirmPalette(); });
+    // /help rows are read-only reference — don't wire them to run anything
+    if (paletteMode !== 'help') {
+      li.addEventListener('mousedown', (e) => { e.preventDefault(); paletteIndex = i; confirmPalette(); });
+    }
     paletteList.appendChild(li);
   });
   updatePaletteHighlight();
@@ -816,7 +868,7 @@ function filterPalette(query) {
   const q = query.toLowerCase().replace(/^\//, '');
   const filtered = q
     ? paletteItems.filter(item =>
-        item.label.toLowerCase().includes(q) ||
+        (item.label || '').toLowerCase().includes(q) ||
         (item.desc || '').toLowerCase().includes(q) ||
         (item.hint || '').toLowerCase().includes(q)
       )
@@ -846,6 +898,8 @@ function closePalette() {
 }
 
 function updatePaletteHighlight() {
+  // /help is read-only — no selectable/active row.
+  if (paletteMode === 'help') return;
   Array.from(paletteList.children).forEach((li, i) => {
     li.classList.toggle('active', i === paletteIndex);
     if (i === paletteIndex) li.scrollIntoView({ block: 'nearest' });
@@ -862,6 +916,9 @@ function insertSnippet(snippet) {
 
 function confirmPalette() {
   if (!paletteMode) return;
+
+  // /help is read-only — Enter just dismisses it
+  if (paletteMode === 'help') { closePalette(); return; }
 
   // Filename mode — read directly from search input, no list needed
   if (paletteMode === 'filename') {
@@ -975,6 +1032,7 @@ function confirmPalette() {
     if (selected.id === 'checklist') { insertSnippet('- [ ] '); return; }
     if (selected.id === 'heading')   { insertSnippet('# '); return; }
     if (selected.id === 'commands')  { openPalette('command'); return; }
+    if (selected.id === 'help')      { openPalette('help'); return; }
     if (selected.id === 'divider') {
       closePalette();
       const content = activeBlockId !== null ? getContentEl(activeBlockId) : null;
@@ -1592,7 +1650,7 @@ function attachEvents() {
       confirmPalette();
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      if (paletteMode === 'command' || paletteMode === 'insert' || paletteMode === 'format') {
+      if (paletteMode === 'command' || paletteMode === 'insert' || paletteMode === 'format' || paletteMode === 'help') {
         closePalette();
       } else if (paletteMode === 'lang' && paletteAnchor) {
         openPalette('insert', { anchor: paletteAnchor });
@@ -2158,6 +2216,6 @@ if (typeof module !== 'undefined') {
     encodeState, decodeState, createBlock, buildBlockEl,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
     capacityLevel, timeAgo, mergeRecents, groupByFolder, stripFormatting,
-    nextNavIndex,
+    nextNavIndex, buildCommandList, buildHelpList,
   };
 }
