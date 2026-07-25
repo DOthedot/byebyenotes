@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 6 files, **44 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 (all green).
+- **Suite:** 7 files, **48 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 4 (all green).
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -49,6 +49,7 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `nextNavIndex` | `home-nav.test.js` | Next Home-screen selection index for Arrow keys (wrap; `-1` = none). |
 | `buildCommandList` | `help.test.js` | The ⌘K command list — asserted against as the source of the help COMMANDS section. |
 | `buildHelpList` | `help.test.js` | Read-only `/help` reference: intro + COMMANDS (from `buildCommandList`) + SHORTCUTS + FORMATTING. |
+| `makeRecentRow` | `recents.test.js` | Build a start-screen recent-note row DOM element; asserts the move-to-folder button's icon + accessible label. |
 
 Not yet unit-tested (browser/integration territory): palette/keyboard handling,
 `syncNow`/URL persistence, image paste + `/api/img`, sync round-trip + `/api/sync`,
@@ -197,6 +198,24 @@ wiring and is **browser-verified**, not here — only the list content is unit-t
 | SHORTCUTS documents the core key bindings | Rows carry `kbd` values `⌘K`, `⌘⇧C`, `⌘.`, `/`, `Enter`, `⇧Enter`. | These match the real key handlers in `app.js`. |
 | FORMATTING documents markdown syntax | `bold`/`italic`/`highlight` descs contain `**`/`*`/`==`; rows include heading, checklist, divider. | The syntax cheatsheet stays accurate. |
 | every row is either a heading or has a label | For each item, `heading` or `label` is truthy. | Guards the render contract (`renderPaletteList` branches on `heading`). |
+
+---
+
+## `recents.test.js` — start-screen recent-note row (4 tests)
+
+Covers `makeRecentRow(snapshot)`, which builds one recent-note row for the Home screen.
+Only the **move-to-folder button's presentation** is asserted here (icon + accessible
+name); the row's click behavior (open note / delete / move) is DOM/event wiring and is
+browser-verified, not here. `makeRecentRow` builds cleanly under jsdom because it touches
+only `document`, `escapeHtml`, and `timeAgo` at build time — the app-state calls happen
+inside the click listener, which the test never fires.
+
+| Test | Asserts | Why it matters |
+|------|---------|----------------|
+| renders a move-to-folder button | The row contains a `.ri-folder` element. | The affordance exists on every row. |
+| uses a vector icon, not the old ▦ glyph | `.ri-folder` contains an `<svg>` and its text has no `▦`. | Pins the fix — the button reads as a folder, not a grid square (issue #6). |
+| has an accessible label instead of a native title | `aria-label === 'move to folder'` and **no** `title` attribute. | Removing `title` (for the custom tooltip) must not drop the screen-reader name. |
+| exposes its label to the styled tooltip via data-tip | `data-tip === 'move to folder'`. | The dark palette tooltip is driven by `[data-tip]::after`. |
 
 ---
 
