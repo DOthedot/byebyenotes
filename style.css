@@ -654,6 +654,11 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
   transition: background 0.15s, border-color 0.15s;
 }
 .recent-item:hover { background: var(--bg-raised); border-color: var(--border-soft); }
+/* Keyboard selection — a persistent form of the hover state. */
+.recent-item.kb-active,
+.recent-folder.kb-active { background: var(--bg-raised); border-color: var(--border-soft); }
+.recent-item.kb-active .ri-del,
+.recent-item.kb-active .ri-folder { opacity: 1; }
 .recent-item .ri-ico { color: var(--fg-faint); font-size: 12px; }
 .recent-item .ri-name {
   color: var(--fg);
