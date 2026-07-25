@@ -845,6 +845,18 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
 #palette-list li.active .cmd-name { color: color-mix(in srgb, var(--fg) 92%, white); }
 #palette-list li:hover:not(.active) { background: color-mix(in srgb, var(--fg) 4%, transparent); }
 
+/* /help section divider — read-only label, not a selectable row */
+#palette-list li.cmd-section {
+  display: block;
+  padding: 11px 8px 3px;
+  font-size: 9px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  cursor: default;
+  pointer-events: none;
+}
+
 #palette-foot {
   display: flex;
   gap: 14px;

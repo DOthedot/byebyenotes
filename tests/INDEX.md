@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 5 files, **38 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 (all green).
+- **Suite:** 6 files, **44 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 (all green).
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -47,6 +47,8 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `mergeRecents` | `sync.test.js` | Merge local + remote recent-note snapshots. |
 | `groupByFolder` | `sync.test.js` | Split snapshots into loose notes + sorted folders. |
 | `nextNavIndex` | `home-nav.test.js` | Next Home-screen selection index for Arrow keys (wrap; `-1` = none). |
+| `buildCommandList` | `help.test.js` | The ⌘K command list — asserted against as the source of the help COMMANDS section. |
+| `buildHelpList` | `help.test.js` | Read-only `/help` reference: intro + COMMANDS (from `buildCommandList`) + SHORTCUTS + FORMATTING. |
 
 Not yet unit-tested (browser/integration territory): palette/keyboard handling,
 `syncNow`/URL persistence, image paste + `/api/img`, sync round-trip + `/api/sync`,
@@ -178,6 +180,23 @@ otherwise the selection wraps around the ends.
 | Down wraps past the end | `(0,'ArrowDown',3)→1`; `(2,'ArrowDown',3)→0`. | Moving down off the last row cycles back to the top. |
 | Up wraps past the top | `(1,'ArrowUp',3)→0`; `(0,'ArrowUp',3)→2`. | Moving up off the first row cycles to the bottom. |
 | unrelated keys leave the index unchanged | `(1,'Enter',3)→1`; `(1,'a',3)→1`. | Only Arrow keys move the selection; everything else is handled elsewhere. |
+
+---
+
+## `help.test.js` — the `/help` reference panel (6 tests)
+
+Covers `buildHelpList()`, the pure builder behind the read-only `/help` panel. The panel
+itself (a new `help` palette mode, non-interactive rows, Escape/Enter to dismiss) is DOM
+wiring and is **browser-verified**, not here — only the list content is unit-tested.
+
+| Test | Asserts | Why it matters |
+|------|---------|----------------|
+| opens with an intro row that mentions the URL | `list[0]` has no `heading` and its label/desc mentions "url". | The panel leads with the app's one-line pitch, not a command. |
+| has COMMANDS, SHORTCUTS and FORMATTING sections in order | The `heading` rows are exactly `['COMMANDS','SHORTCUTS','FORMATTING']`. | Pins the panel's structure and ordering. |
+| COMMANDS lists every command except help itself | Every `buildCommandList()` entry (id ≠ `help`) appears by label; `/help` does **not**. | The section is generated from `buildCommandList()`, so it can't drift — and help doesn't document itself. |
+| SHORTCUTS documents the core key bindings | Rows carry `kbd` values `⌘K`, `⌘⇧C`, `⌘.`, `/`, `Enter`, `⇧Enter`. | These match the real key handlers in `app.js`. |
+| FORMATTING documents markdown syntax | `bold`/`italic`/`highlight` descs contain `**`/`*`/`==`; rows include heading, checklist, divider. | The syntax cheatsheet stays accurate. |
+| every row is either a heading or has a label | For each item, `heading` or `label` is truthy. | Guards the render contract (`renderPaletteList` branches on `heading`). |
 
 ---
 
