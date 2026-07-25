@@ -826,6 +826,10 @@ function filterPalette(query) {
 }
 
 function closePalette() {
+  // A block-anchored palette (/ insert, format, lang) was opened *into* a specific
+  // block, so focus must return there on close — even on the start screen, where we
+  // otherwise avoid grabbing focus for global palettes (Cmd+K command/theme/font).
+  const wasAnchored = paletteAnchor !== null;
   revertPreview();
   paletteOpen = false;
   paletteMode = null;
@@ -836,7 +840,7 @@ function closePalette() {
   paletteEl.classList.remove('anchored');
   folderTarget = null;
   formatSel = null;
-  if (activeBlockId !== null && !emptyVisible) getContentEl(activeBlockId)?.focus();
+  if (activeBlockId !== null && (!emptyVisible || wasAnchored)) getContentEl(activeBlockId)?.focus();
   updateStatus();
 }
 
