@@ -3,6 +3,11 @@ node_modules/
 .playwright-mcp/
 docs/
 
+# Local secrets — never commit (e.g. GITHUB_TOKEN for the pick-issues skill)
+.env
+.env.*
+!.env.example
+
 # Ignore local Claude state, but share the project subagents/hooks/settings
 .claude/*
 !.claude/agents/
