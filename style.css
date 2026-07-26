@@ -108,6 +108,71 @@
   --cursor-color: #7aa2f7;
 }
 
+:root[data-theme="github-light"] {
+  --bg-page:     #ffffff;
+  --bg-raised:   #f6f8fa;
+  --bg-code:     #f0f3f6;
+  --fg:          #24292f;
+  --fg-dim:      #57606a;
+  --fg-faint:    #8c959f;
+  --accent:      #0969da;
+  --border:      #d0d7de;
+  --border-soft: #e4e8ec;
+  --cursor-color: #0969da;
+}
+
+:root[data-theme="atom-one-light"] {
+  --bg-page:     #fafafa;
+  --bg-raised:   #f0f0f0;
+  --bg-code:     #eaeaeb;
+  --fg:          #383a42;
+  --fg-dim:      #696c77;
+  --fg-faint:    #a0a1a7;
+  --accent:      #4078f2;
+  --border:      #dcdce0;
+  --border-soft: #e8e8ea;
+  --cursor-color: #4078f2;
+}
+
+:root[data-theme="gruvbox-light"] {
+  --bg-page:     #fbf1c7;
+  --bg-raised:   #f2e5bc;
+  --bg-code:     #ecdfb0;
+  --fg:          #3c3836;
+  --fg-dim:      #665c54;
+  --fg-faint:    #a89984;
+  --accent:      #af3a03;
+  --border:      #d5c4a1;
+  --border-soft: #e5d9b3;
+  --cursor-color: #af3a03;
+}
+
+:root[data-theme="solarized-dark"] {
+  --bg-page:     #002b36;
+  --bg-raised:   #073642;
+  --bg-code:     #05303b;
+  --fg:          #93a1a1;
+  --fg-dim:      #839496;
+  --fg-faint:    #586e75;
+  --accent:      #268bd2;
+  --border:      #0a4351;
+  --border-soft: #073642;
+  --cursor-color: #268bd2;
+}
+
+:root[data-theme="gruvbox-dark"] {
+  --bg-page:     #282828;
+  --bg-raised:   #3c3836;
+  --bg-code:     #32302f;
+  --fg:          #ebdbb2;
+  --fg-dim:      #bdae93;
+  --fg-faint:    #928374;
+  --accent:      #fabd2f;
+  --border:      #504945;
+  --border-soft: #3c3836;
+  --cursor-color: #fabd2f;
+}
+
 /* ── Page layout ───────────────────────────────────── */
 html, body {
   height: 100%;
@@ -394,6 +459,9 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
   z-index: 2;
 }
 .lang-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -404,7 +472,8 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
   border-radius: 3px;
   cursor: pointer;
 }
-.lang-badge .caret { opacity: 0.6; margin-left: 3px; }
+.lang-badge svg { width: 12px; height: 12px; flex-shrink: 0; }
+.lang-badge .caret { opacity: 0.6; margin-left: 1px; }
 .line-count { font-size: 10px; color: var(--fg-faint); }
 .code-head .head-actions {
   margin-left: auto;
@@ -843,6 +912,7 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
   font-size: 11px;
   flex-shrink: 0;
 }
+#palette-list li .cmd-ico svg { width: 14px; height: 14px; }
 #palette-list li .cmd-name { color: var(--fg); }
 #palette-list li .cmd-desc { font-size: 10.5px; color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #palette-list li .right { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
