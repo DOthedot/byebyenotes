@@ -128,7 +128,9 @@ let docContainer, statusMode, statusLang, statusFont, statusUrl, statusUrlFill,
     statusUrlText, statusHint, statusCopied;
 let paletteOverlay, paletteEl, paletteSearch, paletteTitle, paletteList;
 let emptyState, recentSection, recentList, exampleLink;
-let shareOverlay, shareCard, shareLinkEl, shareQr, capFill, capText;
+let shareOverlay, shareCard, shareLinkEl, shareQr, capFill, capText, shareTtlEl, shareFootMsg;
+let shareTinyUrl = null;   // the URL currently shown in the share panel (tiny, or full-hash fallback)
+let shareReq = 0;          // monotonic token so a stale in-flight upload can't overwrite a newer one
 let fab;
 
 // ── State encode / decode ─────────────────────────────────────────────────────
@@ -1192,6 +1194,27 @@ function buildShareUrl() {
   return window.location.origin + window.location.pathname + '#' + encodeState(collectState());
 }
 
+// ── Tiny URL sharing ──────────────────────────────────────────────────────────
+// A tiny link stores the note hash server-side (api/tiny) under a short id with a TTL.
+const TINY_ID_RE = /^[a-z0-9]{6,12}$/;
+const TINY_EXPIRY = [
+  { ttl: 86400, label: '24hr'  },   // default — first
+  { ttl: 21600, label: '6hr'   },
+  { ttl: 1800,  label: '30min' },
+  { ttl: 60,    label: '1min'  },
+];
+
+// A tiny-share path is exactly /s/<id>. Returns the validated id, or null for any other
+// path (so normal notes / index.html fall through to the usual hash loading).
+function parseTinyId(pathname) {
+  const m = /^\/s\/([^/]+)\/?$/.exec(pathname || '');
+  return m && TINY_ID_RE.test(m[1]) ? m[1] : null;
+}
+
+function tinyExpiryLabel(ttl) {
+  return (TINY_EXPIRY.find(o => o.ttl === ttl) || TINY_EXPIRY[0]).label;
+}
+
 function hasContent() {
   return blocks.length > 1 ||
          blocks.some(b => b.type === 'code') ||
@@ -1258,19 +1281,33 @@ function flashCopied(msg) {
 }
 
 function copyShareLink() {
-  const url = buildShareUrl();
+  const url = shareTinyUrl || buildShareUrl();
   navigator.clipboard.writeText(url).then(() => flashCopied('link copied ✓'));
 }
 
 // ── Share panel ───────────────────────────────────────────────────────────────
-function openShare() {
-  syncNow();
-  const url = buildShareUrl();
-  shareOpen = true;
+// POST the note hash to api/tiny and return the short URL, or null if the store is
+// unavailable (503/offline/error) so the caller can fall back to the full-hash link.
+async function createTiny(hash, ttl) {
+  try {
+    const r = await fetch('/api/tiny', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hash, ttl }),
+    });
+    if (!r.ok) return null;
+    const { id } = await r.json();
+    return (typeof id === 'string' && TINY_ID_RE.test(id)) ? window.location.origin + '/s/' + id : null;
+  } catch (e) {
+    return null;
+  }
+}
 
+function paintShareUrl(url, isFull) {
   const hashIdx = url.indexOf('#');
-  shareLinkEl.innerHTML =
-    `${escapeHtml(url.slice(0, hashIdx + 1))}<span class="hl">${escapeHtml(url.slice(hashIdx + 1, hashIdx + 220))}</span>`;
+  shareLinkEl.innerHTML = (isFull && hashIdx !== -1)
+    ? `${escapeHtml(url.slice(0, hashIdx + 1))}<span class="hl">${escapeHtml(url.slice(hashIdx + 1, hashIdx + 220))}</span>`
+    : `<span class="hl">${escapeHtml(url)}</span>`;
 
   shareQr.innerHTML = '';
   if (typeof QRCode !== 'undefined' && url.length <= QR_MAX_CHARS) {
@@ -1283,15 +1320,53 @@ function openShare() {
       : 'qr unavailable';
     shareQr.appendChild(msg);
   }
+}
 
-  const { ratio, level } = capacityLevel(url.length);
+function openShare() {
+  syncNow();
+  shareOpen = true;
+  shareOverlay.classList.remove('hidden');
+
+  // The capacity meter always reflects the note's own size (the full-hash URL),
+  // regardless of whether we end up sharing a tiny link or the full one.
+  const fullUrl = buildShareUrl();
+  const { ratio, level } = capacityLevel(fullUrl.length);
   capFill.style.width = `${Math.max(ratio * 100, 3)}%`;
-  capText.textContent = `${(url.length / 1000).toFixed(1)}k / ${URL_SAFE_LIMIT / 1000}k safe limit`;
+  capText.textContent = `${(fullUrl.length / 1000).toFixed(1)}k / ${URL_SAFE_LIMIT / 1000}k safe limit`;
   shareCard.classList.toggle('amber', level === 'amber');
   shareCard.classList.toggle('red', level === 'red');
 
-  shareOverlay.classList.remove('hidden');
   updateStatus();
+  renderShareLink(fullUrl);
+}
+
+// Uploads the note at the selected expiry and shows the tiny URL + QR; on failure falls
+// back to the full-hash link. Re-run when the expiry changes.
+async function renderShareLink(fullUrl) {
+  const ttl = Number(shareTtlEl && shareTtlEl.value) || TINY_EXPIRY[0].ttl;
+  // Lock the selector and stamp this request, so a fast expiry change can't race: a
+  // superseded upload resolving late must not repaint over the newer one's result.
+  const token = ++shareReq;
+  if (shareTtlEl) shareTtlEl.disabled = true;
+  shareFootMsg.innerHTML = '&nbsp;&nbsp;preparing a shareable link…';
+  shareLinkEl.textContent = '';
+  shareQr.innerHTML = '';
+
+  const hash = fullUrl.slice(fullUrl.indexOf('#') + 1);
+  const tiny = await createTiny(hash, ttl);
+  if (!shareOpen || token !== shareReq) return;   // closed, or superseded by a newer request
+
+  if (tiny) {
+    shareTinyUrl = tiny;
+    if (shareTtlEl) shareTtlEl.disabled = false;   // re-enable for the next change
+    paintShareUrl(tiny, false);
+    shareFootMsg.innerHTML = `&nbsp;&nbsp;stored on the server · expires in ${escapeHtml(tinyExpiryLabel(ttl))}`;
+  } else {
+    shareTinyUrl = fullUrl;
+    if (shareTtlEl) shareTtlEl.disabled = true;    // no server → expiry is meaningless
+    paintShareUrl(fullUrl, true);
+    shareFootMsg.innerHTML = '&nbsp;&nbsp;server unavailable — sharing the full link';
+  }
 }
 
 function closeShare() {
@@ -1759,11 +1834,13 @@ function attachEvents() {
     if (e.target === shareOverlay || e.target.closest('.share-head .esc')) closeShare();
   });
   document.getElementById('share-copy').addEventListener('click', (e) => {
-    navigator.clipboard.writeText(buildShareUrl()).then(() => {
+    navigator.clipboard.writeText(shareTinyUrl || buildShareUrl()).then(() => {
       e.target.textContent = 'copied ✓';
       setTimeout(() => { e.target.textContent = 'copy link'; }, 1200);
     });
   });
+  // Re-upload at the newly chosen expiry and refresh the shown link + QR.
+  shareTtlEl.addEventListener('change', () => { if (shareOpen) renderShareLink(buildShareUrl()); });
   document.getElementById('share-copy-md').addEventListener('click', (e) => {
     navigator.clipboard.writeText(markdownString()).then(() => {
       e.target.textContent = 'copied ✓';
@@ -2272,7 +2349,12 @@ document.addEventListener('DOMContentLoaded', () => {
   shareQr        = document.getElementById('share-qr');
   capFill        = document.getElementById('cap-fill');
   capText        = document.getElementById('cap-text');
+  shareTtlEl     = document.getElementById('share-ttl');
+  shareFootMsg   = document.getElementById('share-foot-msg');
   fab            = document.getElementById('fab');
+
+  shareTtlEl.innerHTML = TINY_EXPIRY
+    .map(o => `<option value="${o.ttl}">${o.label}</option>`).join('');
 
   statusHint.textContent = '/ insert · ⌘K commands · ⌘⇧C share · ⌘. focus';
   exampleLink.href = '#' + encodeState(EXAMPLE_STATE);
@@ -2282,13 +2364,65 @@ document.addEventListener('DOMContentLoaded', () => {
     if (stored && /^[0-9a-f]{64}$/.test(stored)) syncKey = stored;
   } catch (e) {}
 
-  loadState();
-  maybeShowEmptyState();
   attachEvents();
+
+  // A /s/<id> path is a tiny share link — resolve it server-side before the normal
+  // hash-based load. Any other path loads the note from location.hash as usual.
+  const tinyId = parseTinyId(window.location.pathname);
+  if (tinyId) {
+    resolveTiny(tinyId);
+  } else {
+    loadState();
+    maybeShowEmptyState();
+  }
   updateStatus();
 
   if (syncKey) syncPull().catch(() => {});
 });
+
+// ── Tiny-link resolution (boot) ───────────────────────────────────────────────
+function tinyStateEl() {
+  let el = document.getElementById('tiny-state');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'tiny-state';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function showTinyLoading() {
+  tinyStateEl().innerHTML = '<div class="ts-inner">opening shared link…</div>';
+}
+function showTinyMessage(msg) {
+  tinyStateEl().innerHTML =
+    `<div class="ts-inner"><p>${escapeHtml(msg)}</p><a href="/">start a new note →</a></div>`;
+}
+function clearTinyState() {
+  const el = document.getElementById('tiny-state');
+  if (el) el.remove();
+}
+
+async function resolveTiny(id) {
+  showTinyLoading();
+  try {
+    const r = await fetch('/api/tiny?id=' + encodeURIComponent(id));
+    if (r.status === 404) return showTinyMessage('this shared link has expired.');
+    if (!r.ok)            return showTinyMessage('shared links need the server, which isn’t available right now.');
+    const { hash } = await r.json();
+    if (typeof hash !== 'string' || !decodeState(hash)) {
+      return showTinyMessage('this shared link is invalid.');
+    }
+    clearTinyState();
+    // Detach from the /s/<id> path into a normal hash note, so edits persist and a
+    // refresh loads the note locally instead of re-fetching (and it's now theirs).
+    // replaceState (not location.hash=) avoids firing the hashchange re-loader.
+    history.replaceState(null, '', '/#' + hash);
+    loadState();                   // reads location.hash and renders
+    maybeShowEmptyState();
+  } catch (e) {
+    showTinyMessage('shared links need the server, which isn’t available right now.');
+  }
+}
 
 // Next selection index for the Home-screen recent list. current === -1 means
 // nothing selected; from there ArrowDown picks the first row and ArrowUp the last.
@@ -2309,5 +2443,6 @@ if (typeof module !== 'undefined') {
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow,
     langIcon, langBadgeHtml, paletteEscTarget,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
+    parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
   };
 }

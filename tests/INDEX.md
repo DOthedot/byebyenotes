@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 7 files, **48 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 4 (all green).
+- **Suite:** 9 files, **60 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 4 · tiny 4 · api-tiny 8 (all green).
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -50,6 +50,9 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `buildCommandList` | `help.test.js` | The ⌘K command list — asserted against as the source of the help COMMANDS section. |
 | `buildHelpList` | `help.test.js` | Read-only `/help` reference: intro + COMMANDS (from `buildCommandList`) + SHORTCUTS + FORMATTING. |
 | `makeRecentRow` | `recents.test.js` | Build a start-screen recent-note row DOM element; asserts the move-to-folder button's icon + accessible label. |
+| `parseTinyId` | `tiny.test.js` | `/s/<id>` path → validated tiny id, or `null`. |
+| `tinyExpiryLabel`, `TINY_EXPIRY` | `tiny.test.js` | Expiry-option list (24hr first) + ttl→label with 24hr fallback. |
+| `api/tiny.js` handler | `api-tiny.test.js` | The serverless handler itself (not an `app.js` export) — see its section below. |
 
 Not yet unit-tested (browser/integration territory): palette/keyboard handling,
 `syncNow`/URL persistence, image paste + `/api/img`, sync round-trip + `/api/sync`,
@@ -216,6 +219,41 @@ inside the click listener, which the test never fires.
 | uses a vector icon, not the old ▦ glyph | `.ri-folder` contains an `<svg>` and its text has no `▦`. | Pins the fix — the button reads as a folder, not a grid square (issue #6). |
 | has an accessible label instead of a native title | `aria-label === 'move to folder'` and **no** `title` attribute. | Removing `title` (for the custom tooltip) must not drop the screen-reader name. |
 | exposes its label to the styled tooltip via data-tip | `data-tip === 'move to folder'`. | The dark palette tooltip is driven by `[data-tip]::after`. |
+
+---
+
+## `tiny.test.js` — tiny-URL client helpers (4 tests)
+
+Pure helpers behind tiny-URL sharing. The DOM/async flow (share-panel upload, `/s/<id>`
+resolution) is browser-verified, not here.
+
+| Test | Asserts | Why it matters |
+|------|---------|----------------|
+| `parseTinyId` extracts the id from `/s/<id>` | `/s/abc123` and `/s/abc123/` → `'abc123'`. | Boot uses this to detect a tiny link before the normal hash load. |
+| `parseTinyId` returns null for non-tiny/invalid paths | `/`, `/index.html`, too-short/bad-char ids, and `/s/<id>/extra` → `null`. | Normal notes must fall through to hash loading; only a clean `/s/<id>` resolves. |
+| `TINY_EXPIRY` lists 24hr first, four options | `[0].ttl === 86400`; ttls are exactly `{60,1800,21600,86400}`. | Default is 24hr; the select + api share this option set. |
+| `tinyExpiryLabel` maps ttl → label, falls back to 24hr | `1800→'30min'`, `86400→'24hr'`, unknown→`'24hr'`. | Footer text ("expires in …") stays correct. |
+
+## `api-tiny.test.js` — the `api/tiny.js` serverless handler (8 tests)
+
+The only test that drives a **serverless handler** directly (the others test `app.js`
+exports). It `require`s `api/tiny.js` with a mocked `(req, res)` and a mocked KV REST
+endpoint (`global.fetch`); env is set per-case so the handler's load-time KV detection is
+exercised. Mirrors the fail-soft contract in [`../api/README.md`](../api/README.md).
+
+| Test | Asserts |
+|------|---------|
+| 503 when KV not configured | No KV env → `503`. |
+| POST rejects a ttl not in the allowed set | `ttl` outside `{60,1800,21600,86400}` → `400`. |
+| POST stores the hash with a Redis TTL and returns an id | `200 {id}` (id matches `/^[a-z0-9]{6,12}$/`) and the kv command is `['SET','tiny:<id>',hash,'EX',ttl]`. |
+| POST rejects an oversized hash | hash > 200000 chars → `413`. |
+| GET unknown id returns 404 | kv returns null → `404`. |
+| GET known id returns the stored hash | kv returns the value → `200 {hash}`. |
+| GET bad id returns 400 | id failing `/^[a-z0-9]{6,12}$/` → `400`. |
+| unsupported method returns 405 | `DELETE` → `405`. |
+
+> **Note:** this suite adds handler coverage, but the true end-to-end path (real KV,
+> `/s/<id>` rewrite) is only exercised on the deployed site — see `AGENTS.md → Gotchas`.
 
 ---
 
