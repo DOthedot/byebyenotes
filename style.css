@@ -995,6 +995,37 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
 .btn.primary { background: var(--accent); color: var(--bg-page); font-weight: 600; }
 .btn.ghost { background: transparent; color: var(--fg-dim); border-color: var(--border); }
 
+/* Expiry selector — a ghost button that's a <select>, with a custom caret. */
+#share-ttl {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236f7478' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+}
+#share-ttl:hover { transform: none; color: var(--fg); }
+#share-ttl:disabled { opacity: 0.4; cursor: not-allowed; }
+#share-ttl option { background: var(--bg-raised); color: var(--fg); }
+
+/* Full-screen state shown while opening / after an expired-or-missing tiny link. */
+#tiny-state {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: var(--bg-page);
+  color: var(--fg-dim);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+}
+#tiny-state .ts-inner { display: grid; gap: 10px; }
+#tiny-state a { color: var(--accent); text-decoration: none; font-size: 12px; }
+#tiny-state a:hover { text-decoration: underline; }
+
 .capacity { margin-top: auto; padding-top: 14px; }
 .capacity .cap-row {
   display: flex;
