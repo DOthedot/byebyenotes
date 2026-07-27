@@ -253,7 +253,18 @@ function loadSnapshots() {
   }
 }
 
+// A snapshot only opens to real content when its stored hash decodes to a state with
+// at least one block. An empty/missing/undecodable hash (from a synced or legacy entry,
+// or a save that never captured content) would otherwise dissolve the home screen into a
+// blank note with no navigation — issue #19. Checked both before saving and on click.
+function isOpenableSnapshot(s) {
+  if (!s || typeof s.hash !== 'string' || !s.hash) return false;
+  const state = decodeState(s.hash);
+  return !!(state && Array.isArray(state.blocks) && state.blocks.length > 0);
+}
+
 function saveSnapshot(snap) {
+  if (!isOpenableSnapshot(snap)) return;   // never persist a note that can't be reopened
   try {
     const list = loadSnapshots().filter(s => s.nid !== snap.nid);
     list.unshift(snap);
@@ -337,6 +348,8 @@ async function syncPull() {
   if (!res.ok) throw new Error('pull failed');
   const { data } = await res.json();
   if (!data) return;
+  // Remote recents bypass saveSnapshot's openability guard, so a legacy/dead entry can
+  // still land here — the click-time guard in makeRecentRow catches those regardless.
   const merged = mergeRecents(loadSnapshots(), data.recents || []);
   try { localStorage.setItem(SNAP_KEY, JSON.stringify(merged)); } catch (e) {}
   // Adopt remote prefs only when they're newer than what this device has
@@ -1476,6 +1489,12 @@ function makeRecentRow(s) {
       openPalette('folder');
       return;
     }
+    if (!isOpenableSnapshot(s)) {
+      // Dead entry (empty/undecodable hash) — its content is gone. Say so instead of
+      // dissolving the home screen into a blank note (issue #19). Leave the row in place.
+      flashCopied("couldn't open this note — its saved data is missing");
+      return;
+    }
     dissolveEmptyState();
     window.location.hash = s.hash;
   });
@@ -2440,7 +2459,7 @@ if (typeof module !== 'undefined') {
     encodeState, decodeState, createBlock, buildBlockEl,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
     capacityLevel, timeAgo, mergeRecents, groupByFolder, stripFormatting,
-    nextNavIndex, buildCommandList, buildHelpList, makeRecentRow,
+    nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
     langIcon, langBadgeHtml, paletteEscTarget,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
