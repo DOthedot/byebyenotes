@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 13 files, **75 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 4 · tiny 4 · api-tiny 8 · asset-paths 2 · plus themes/logos/palette-esc (all green).
+- **Suite:** 13 files, **81 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 10 · tiny 4 · api-tiny 8 · asset-paths 2 · plus themes/logos/palette-esc (all green).
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -50,6 +50,7 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `buildCommandList` | `help.test.js` | The ⌘K command list — asserted against as the source of the help COMMANDS section. |
 | `buildHelpList` | `help.test.js` | Read-only `/help` reference: intro + COMMANDS (from `buildCommandList`) + SHORTCUTS + FORMATTING. |
 | `makeRecentRow` | `recents.test.js` | Build a start-screen recent-note row DOM element; asserts the move-to-folder button's icon + accessible label. |
+| `isOpenableSnapshot` | `recents.test.js` | Whether a recent snapshot can actually reopen (non-empty hash that decodes to blocks); guards save + click so a dead note never opens blank (issue #19). |
 | `parseTinyId` | `tiny.test.js` | `/s/<id>` path → validated tiny id, or `null`. |
 | `tinyExpiryLabel`, `TINY_EXPIRY` | `tiny.test.js` | Expiry-option list (24hr first) + ttl→label with 24hr fallback. |
 | `api/tiny.js` handler | `api-tiny.test.js` | The serverless handler itself (not an `app.js` export) — see its section below. |
@@ -204,10 +205,11 @@ wiring and is **browser-verified**, not here — only the list content is unit-t
 
 ---
 
-## `recents.test.js` — start-screen recent-note row (4 tests)
+## `recents.test.js` — start-screen recent-note row + snapshot openability (10 tests)
 
-Covers `makeRecentRow(snapshot)`, which builds one recent-note row for the Home screen.
-Only the **move-to-folder button's presentation** is asserted here (icon + accessible
+Covers `makeRecentRow(snapshot)`, which builds one recent-note row for the Home screen,
+and `isOpenableSnapshot(snapshot)`, the openability guard behind issue #19. Only the
+**move-to-folder button's presentation** is asserted for the row (icon + accessible
 name); the row's click behavior (open note / delete / move) is DOM/event wiring and is
 browser-verified, not here. `makeRecentRow` builds cleanly under jsdom because it touches
 only `document`, `escapeHtml`, and `timeAgo` at build time — the app-state calls happen
@@ -219,6 +221,12 @@ inside the click listener, which the test never fires.
 | uses a vector icon, not the old ▦ glyph | `.ri-folder` contains an `<svg>` and its text has no `▦`. | Pins the fix — the button reads as a folder, not a grid square (issue #6). |
 | has an accessible label instead of a native title | `aria-label === 'move to folder'` and **no** `title` attribute. | Removing `title` (for the custom tooltip) must not drop the screen-reader name. |
 | exposes its label to the styled tooltip via data-tip | `data-tip === 'move to folder'`. | The dark palette tooltip is driven by `[data-tip]::after`. |
+| `isOpenableSnapshot` true for a decodable hash with blocks | A hash decoding to `{blocks:[…]}` → `true`. | Real notes still open. |
+| false for an empty-string hash | `hash: ''` → `false`. | The reported "no # at all" blank-note case (issue #19). |
+| false for a missing hash field | no `hash` → `false`. | The `#undefined` variant. |
+| false for an undecodable hash | garbage hash → `false`. | Corrupt/legacy entries can't strand the user. |
+| false when decoded state has no blocks | `{blocks:[]}` → `false`. | An empty note isn't openable content. |
+| false for a null/undefined snapshot | `null`/`undefined` → `false`. | Defensive: no throw on bad input. |
 
 ---
 
