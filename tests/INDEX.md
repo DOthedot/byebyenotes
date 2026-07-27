@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 9 files, **60 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 4 · tiny 4 · api-tiny 8 (all green).
+- **Suite:** 13 files, **75 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 4 · tiny 4 · api-tiny 8 · asset-paths 2 · plus themes/logos/palette-esc (all green).
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -254,6 +254,19 @@ exercised. Mirrors the fail-soft contract in [`../api/README.md`](../api/README.
 
 > **Note:** this suite adds handler coverage, but the true end-to-end path (real KV,
 > `/s/<id>` rewrite) is only exercised on the deployed site — see `AGENTS.md → Gotchas`.
+
+## `asset-paths.test.js` — index.html asset references (2 tests)
+
+Not a function test — it reads `index.html` as text. Guards **issue #17**: a tiny link
+`/s/<id>` is a nested path, so a *relative* local asset ref (`href="style.css"`) resolves
+to `/s/style.css`, the SPA rewrite serves `index.html` back as `text/html`, and the
+browser rejects the CSS/JS by MIME type → blank page. Local asset refs must be
+root-absolute so they load identically from `/` and `/s/<id>`.
+
+| Test | Asserts |
+|------|---------|
+| every local asset reference is root-absolute | No `href`/`src` in `index.html` that is a local file (not `http(s):`/`//`/`data:`/`#`) may be relative. |
+| style.css and app.js use a leading slash | `index.html` references `/style.css` and `/app.js`. |
 
 ---
 
