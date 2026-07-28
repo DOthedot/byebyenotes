@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 13 files, **81 tests** — state 4 · blocks 5 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 10 · tiny 4 · api-tiny 8 · asset-paths 2 · plus themes/logos/palette-esc (all green).
+- **Suite:** 13 files, **86 tests** — state 4 · blocks 10 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 10 · tiny 4 · api-tiny 8 · asset-paths 2 · plus themes/logos/palette-esc (all green).
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -37,6 +37,7 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `decodeState` | `state.test.js` | Hash string → state object; `null` on empty/corrupt input. |
 | `createBlock` | `blocks.test.js` | Build a block model `{id, type, lang, content}`. |
 | `buildBlockEl` | `blocks.test.js` | Build the block's DOM element (two-layer render). |
+| `insertDividerBlocks` | `blocks.test.js` | Plan a divider insert over `blocks[]` — empty block becomes the divider, a block with text is preserved and the divider goes after it (regression guard for #21). |
 | `renderMarkdown` | `markdown.test.js` | Text block source → rendered markdown HTML (`.md-layer`). |
 | `escapeHtml` | `markdown.test.js` | Escape `<`, `>`, `&`, `"` for safe HTML injection. |
 | `toggleCheckboxLine` | `markdown.test.js` | Flip `- [ ]` ⇄ `- [x]` on a given source line. |
