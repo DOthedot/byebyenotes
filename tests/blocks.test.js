@@ -45,3 +45,47 @@ test('buildBlockEl text block has markdown layer', () => {
   const el = mod.buildBlockEl(b);
   expect(el.querySelector('.md-layer')).not.toBeNull();
 });
+
+// A fresh empty text block, id-injected so insertDividerBlocks stays pure/testable.
+function makeBlockFactory(start = 100) {
+  let id = start;
+  return () => ({ id: ++id, type: 'text', lang: null, content: '' });
+}
+
+test('insertDividerBlocks preserves the block text and adds a divider after it', () => {
+  // Regression guard for #21: inserting a divider used to overwrite the block.
+  const blocks = [{ id: 1, type: 'text', lang: null, content: 'hello world' }];
+  const { blocks: out, focusId } = mod.insertDividerBlocks(blocks, 1, 'hello world', makeBlockFactory());
+  expect(out.map(b => b.content)).toEqual(['hello world', '---', '']);
+  expect(out[0].content).toBe('hello world'); // the data that used to be lost
+  expect(focusId).toBe(out[2].id);            // focus the fresh trailing block
+});
+
+test('insertDividerBlocks turns an empty block into the divider itself', () => {
+  const blocks = [{ id: 1, type: 'text', lang: null, content: '' }];
+  const { blocks: out, focusId } = mod.insertDividerBlocks(blocks, 1, '', makeBlockFactory());
+  expect(out.map(b => b.content)).toEqual(['---', '']);
+  expect(focusId).toBe(out[1].id);
+});
+
+test('insertDividerBlocks treats a whitespace-only block as empty', () => {
+  const blocks = [{ id: 1, type: 'text', lang: null, content: '   ' }];
+  const { blocks: out } = mod.insertDividerBlocks(blocks, 1, '   ', makeBlockFactory());
+  expect(out.map(b => b.content)).toEqual(['---', '']);
+});
+
+test('insertDividerBlocks does not mutate the original blocks array or its text', () => {
+  const blocks = [{ id: 1, type: 'text', lang: null, content: 'keep me' }];
+  mod.insertDividerBlocks(blocks, 1, 'keep me', makeBlockFactory());
+  expect(blocks).toHaveLength(1);
+  expect(blocks[0].content).toBe('keep me');
+});
+
+test('insertDividerBlocks inserts after the active block, keeping later blocks', () => {
+  const blocks = [
+    { id: 1, type: 'text', lang: null, content: 'a' },
+    { id: 2, type: 'text', lang: null, content: 'b' },
+  ];
+  const { blocks: out } = mod.insertDividerBlocks(blocks, 1, 'a', makeBlockFactory());
+  expect(out.map(b => b.content)).toEqual(['a', '---', '', 'b']);
+});

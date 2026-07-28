@@ -603,6 +603,30 @@ function insertBlockAfter(afterId, newBlock) {
   return newBlock;
 }
 
+// Pure. Plan a divider insertion over the blocks array (the source of truth), without
+// touching the DOM. An empty active block becomes the divider itself; a block that has
+// text is preserved and the divider is inserted as a new block after it. Either way a
+// fresh empty text block follows and is the one to focus. `mkBlock` is injected (returns
+// a fresh empty block) so this stays pure and unit-testable. The input array and its
+// block objects are not mutated.
+function insertDividerBlocks(blocks, activeId, activeText, mkBlock) {
+  const idx = blocks.findIndex(b => b.id === activeId);
+  if (idx === -1) return { blocks, focusId: activeId };
+  const out = blocks.slice();
+  let trailing;
+  if ((activeText || '').trim() === '') {
+    out[idx] = Object.assign({}, out[idx], { content: '---' });
+    trailing = mkBlock();
+    out.splice(idx + 1, 0, trailing);
+  } else {
+    const divider = mkBlock();
+    divider.content = '---';
+    trailing = mkBlock();
+    out.splice(idx + 1, 0, divider, trailing);
+  }
+  return { blocks: out, focusId: trailing.id };
+}
+
 function moveBlock(id, dir) {
   const idx = blocks.findIndex(b => b.id === id);
   const newIdx = idx + dir;
@@ -1135,13 +1159,27 @@ function confirmPalette() {
     if (selected.id === 'help')      { openPalette('help'); return; }
     if (selected.id === 'divider') {
       closePalette();
-      const content = activeBlockId !== null ? getContentEl(activeBlockId) : null;
-      if (content) {
-        content.innerText = '---';
-        syncMarkdown(activeBlockId);
-        const newText = createBlock('text');
-        insertBlockAfter(activeBlockId, newText);
-        focusBlock(newText.id, false);
+      const active = getBlockData(activeBlockId);
+      if (active && active.type === 'text') {
+        // Ask the tested planner what the blocks should become, then apply it to the DOM.
+        const { blocks: planned, focusId } =
+          insertDividerBlocks(blocks, active.id, getBlockText(active), () => createBlock('text'));
+        const at = planned.findIndex(b => b.id === active.id);
+        // The active block itself may have become the divider (the empty-block case).
+        if (planned[at].content !== active.content) {
+          active.content = planned[at].content;
+          const content = getContentEl(active.id);
+          if (content) content.innerText = active.content;
+          syncMarkdown(active.id);
+        }
+        // Any freshly-planned blocks sit right after it, before the next existing block.
+        let anchorId = active.id;
+        for (let i = at + 1; i < planned.length && !getBlockData(planned[i].id); i++) {
+          insertBlockAfter(anchorId, planned[i]);
+          if (planned[i].content) syncMarkdown(planned[i].id);
+          anchorId = planned[i].id;
+        }
+        focusBlock(focusId, false);
         scheduleSync();
       }
       return;
@@ -2456,7 +2494,7 @@ function nextNavIndex(current, key, count) {
 // ── Export for tests (no-op in browser) ──────────────────────────────────────
 if (typeof module !== 'undefined') {
   module.exports = {
-    encodeState, decodeState, createBlock, buildBlockEl,
+    encodeState, decodeState, createBlock, buildBlockEl, insertDividerBlocks,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
     capacityLevel, timeAgo, mergeRecents, groupByFolder, stripFormatting,
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
