@@ -1798,6 +1798,40 @@ function caretPoint(fallbackEl) {
   return null;
 }
 
+// How far to scroll #document-container so the caret sits inside [viewTop, viewBottom]
+// with `margin` px of breathing room. Positive = scroll down (caret was below the
+// fold), negative = scroll up, 0 = already comfortably visible. Pure, so it's unit-
+// tested; the DOM measurement lives in scrollCaretIntoView.
+function caretScrollDelta(caretTop, caretBottom, viewTop, viewBottom, margin) {
+  if (caretBottom + margin > viewBottom) return caretBottom + margin - viewBottom;
+  if (caretTop - margin < viewTop)       return caretTop - margin - viewTop;
+  return 0;
+}
+
+const CARET_SCROLL_MARGIN = 28;   // ~one line of breathing room below/above the caret
+
+// Keep the caret visible after an edit that grows the block (Enter → new line/block).
+// execCommand('insertText','\n') doesn't trigger the browser's native caret-scroll
+// inside our overflow container, so the caret drifts off-screen (issue #26). Measure
+// after layout (rAF); a collapsed caret at a line boundary can report an empty rect,
+// so fall back to the active block's box (the fresh line sits at its bottom).
+function scrollCaretIntoView() {
+  if (!docContainer) return;
+  requestAnimationFrame(() => {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    let rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (!rect || !(rect.top || rect.bottom || rect.height)) {
+      const el = activeBlockId !== null ? getBlockEl(activeBlockId) : null;
+      if (!el) return;
+      rect = el.getBoundingClientRect();
+    }
+    const view  = docContainer.getBoundingClientRect();
+    const delta = caretScrollDelta(rect.top, rect.bottom, view.top, view.bottom, CARET_SCROLL_MARGIN);
+    if (delta) docContainer.scrollTop += delta;
+  });
+}
+
 function handleBlockAction(act, blockId) {
   const block = getBlockData(blockId);
   if (!block) return;
@@ -2214,12 +2248,14 @@ function attachEvents() {
             for (let i = 0; i < line.length; i++) sel.modify('extend', 'backward', 'character');
             document.execCommand('delete');
           }
+          scrollCaretIntoView();
           return;
         }
       }
       // Not in a list: Enter is a plain line break inside the block
       e.preventDefault();
       document.execCommand('insertText', false, '\n');
+      scrollCaretIntoView();
       return;
     }
 
@@ -2258,6 +2294,7 @@ function attachEvents() {
         document.execCommand('insertText', false, '\n' + indent);
       }
       syncHighlight(blockId);
+      scrollCaretIntoView();
       return;
     }
 
@@ -2273,6 +2310,9 @@ function attachEvents() {
         focusBlock(newText.id, false);
         scheduleSync();
       }
+      // Focus mode already smooth-centers the newly focused block via centerActiveBlock
+      // (on focusin); a direct scrollTop write here would interrupt that animation.
+      if (!focusMode) scrollCaretIntoView();
       return;
     }
 
@@ -2287,6 +2327,9 @@ function attachEvents() {
         insertBlockAfter(blockId, newText);
         focusBlock(newText.id, false);
       }
+      // See the text Shift+Enter note: skip in focus mode so centerActiveBlock's
+      // smooth centering isn't interrupted by a direct scrollTop write.
+      if (!focusMode) scrollCaretIntoView();
       return;
     }
 
@@ -2535,7 +2578,7 @@ if (typeof module !== 'undefined') {
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
     capacityLevel, timeAgo, mergeRecents, groupByFolder, stripFormatting,
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
-    langIcon, langBadgeHtml, paletteEscTarget, restorableCaret,
+    langIcon, langBadgeHtml, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
   };
