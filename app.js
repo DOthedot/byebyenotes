@@ -107,6 +107,7 @@ let paletteOpen  = false;
 let paletteMode  = null;        // 'command' | 'insert' | 'lang' | 'changeLang' | 'font' | 'theme' | 'export' | 'filename'
 let paletteIndex = 0;
 let paletteAnchor = null;       // {x, y} viewport coords for caret-anchored palette
+let savedCaret   = null;        // cloned Range: where the caret was when a block-anchored palette opened, restored on close
 let changeLangTarget = null;    // block id whose language is being changed
 let folderTarget     = null;    // snapshot nid being filed into a folder
 let formatSel        = null;    // { blockId, range } saved while the format palette is open
@@ -818,7 +819,19 @@ function openPalette(mode, opts = {}) {
   paletteMode  = mode;
   paletteIndex = 0;
   paletteOpen  = true;
-  if (opts.anchor !== undefined) paletteAnchor = opts.anchor;
+  if (opts.anchor !== undefined) {
+    paletteAnchor = opts.anchor;
+    // Remember where the caret sat so closePalette can put it back — .focus() alone
+    // drops it at the block start. Capture before paletteSearch.focus() steals it,
+    // and only overwrite when the live selection is genuinely inside this block, so
+    // an intra-palette hop (insert → lang → insert) re-entering openPalette while
+    // focus is on the search input keeps the original caret instead of clobbering it.
+    const sel = window.getSelection();
+    const contentEl = activeBlockId !== null ? getContentEl(activeBlockId) : null;
+    if (sel && sel.rangeCount && restorableCaret(sel.getRangeAt(0), contentEl)) {
+      savedCaret = sel.getRangeAt(0).cloneRange();
+    }
+  }
 
   if (mode === 'command') {
     paletteAnchor = null;
@@ -998,7 +1011,23 @@ function closePalette() {
   paletteEl.classList.remove('anchored');
   folderTarget = null;
   formatSel = null;
-  if (activeBlockId !== null && (!emptyVisible || wasAnchored)) getContentEl(activeBlockId)?.focus();
+  if (activeBlockId !== null && (!emptyVisible || wasAnchored)) {
+    const content = getContentEl(activeBlockId);
+    // A block that already has markdown hides its editable layer when blurred; reveal
+    // it before focusing or .focus() no-ops on a display:none element and focus falls
+    // to <body> (same gotcha focusBlock and format-confirm handle).
+    getBlockEl(activeBlockId)?.classList.add('active', 'editing');
+    content?.focus();
+    // Put the caret back where it was when the palette opened — plain focus() lands
+    // it at the block start. Skip a stale range (block re-rendered) and let the
+    // default focus stand rather than throwing.
+    if (restorableCaret(savedCaret, content)) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedCaret);
+    }
+  }
+  savedCaret = null;
   updateStatus();
 }
 
@@ -1009,6 +1038,14 @@ function paletteEscTarget(mode, hasAnchor) {
   if (mode === 'help') return 'command';
   if (mode === 'lang' && hasAnchor) return 'insert';
   return 'command';
+}
+
+// A saved caret is safe to restore only if its start node is still inside the
+// block we're refocusing. Guards against a stale range whose nodes were replaced
+// while the palette was open (e.g. a re-rendered block) — restore would throw or
+// land nowhere; instead closePalette falls back to plain focus (block start).
+function restorableCaret(range, contentEl) {
+  return !!(range && contentEl && contentEl.contains(range.startContainer));
 }
 
 // Run the ESC action for the current palette mode. Shared by the search-input
@@ -2498,7 +2535,7 @@ if (typeof module !== 'undefined') {
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
     capacityLevel, timeAgo, mergeRecents, groupByFolder, stripFormatting,
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
-    langIcon, langBadgeHtml, paletteEscTarget,
+    langIcon, langBadgeHtml, paletteEscTarget, restorableCaret,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
   };

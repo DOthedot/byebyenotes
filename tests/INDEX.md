@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 13 files, **86 tests** — state 4 · blocks 10 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 10 · tiny 4 · api-tiny 8 · asset-paths 2 · plus themes/logos/palette-esc (all green).
+- **Suite:** 14 files, **89 tests** — state 4 · blocks 10 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 10 · tiny 4 · api-tiny 8 · asset-paths 2 · plus themes/logos/palette-esc/palette-caret (all green).
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -52,6 +52,7 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `buildHelpList` | `help.test.js` | Read-only `/help` reference: intro + COMMANDS (from `buildCommandList`) + SHORTCUTS + FORMATTING. |
 | `makeRecentRow` | `recents.test.js` | Build a start-screen recent-note row DOM element; asserts the move-to-folder button's icon + accessible label. |
 | `isOpenableSnapshot` | `recents.test.js` | Whether a recent snapshot can actually reopen (non-empty hash that decodes to blocks); guards save + click so a dead note never opens blank (issue #19). |
+| `restorableCaret` | `palette-caret.test.js` | Whether a saved caret `Range` may be re-applied when `closePalette` refocuses the block — start node still inside the block, else fall back to plain focus. Guards the caret restore that keeps ESC on a `/`-palette from jumping to the block start (issue #24). |
 | `parseTinyId` | `tiny.test.js` | `/s/<id>` path → validated tiny id, or `null`. |
 | `tinyExpiryLabel`, `TINY_EXPIRY` | `tiny.test.js` | Expiry-option list (24hr first) + ttl→label with 24hr fallback. |
 | `api/tiny.js` handler | `api-tiny.test.js` | The serverless handler itself (not an `app.js` export) — see its section below. |
