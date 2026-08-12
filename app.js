@@ -288,6 +288,30 @@ function groupByFolder(snaps) {
   return { loose, folders: [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])) };
 }
 
+// Flatten snapshots into the ordered rows the sidebar tree renders: folders
+// first (each followed by its notes unless folded), then loose notes. Pure —
+// the DOM is built from these rows, never read back from.
+function buildTreeRows(snaps, folded) {
+  const list = Array.isArray(snaps) ? snaps : [];
+  const has = (name) => !!(folded && typeof folded.has === 'function' && folded.has(name));
+  const { loose, folders } = groupByFolder(list);
+  const rows = [];
+  const note = (s, folder) => ({
+    kind: 'note',
+    nid: s.nid,
+    title: s.title || 'untitled',
+    folder,
+    t: s.t || 0,
+  });
+  folders.forEach(([name, items]) => {
+    const isFolded = has(name);
+    rows.push({ kind: 'folder', name, count: items.length, folded: isFolded });
+    if (!isFolded) items.forEach(s => rows.push(note(s, name)));
+  });
+  loose.forEach(s => rows.push(note(s, null)));
+  return rows;
+}
+
 function assignFolder(nid, folder) {
   try {
     const list = loadSnapshots();
@@ -2576,7 +2600,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl, insertDividerBlocks,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
-    capacityLevel, timeAgo, mergeRecents, groupByFolder, stripFormatting,
+    capacityLevel, timeAgo, mergeRecents, groupByFolder, buildTreeRows, stripFormatting,
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
     langIcon, langBadgeHtml, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
