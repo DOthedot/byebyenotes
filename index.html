@@ -49,7 +49,17 @@
     </div>
   </div>
 
-  <div id="document-container"></div>
+  <div id="app-shell">
+    <aside id="sidebar" aria-label="notes">
+      <div class="sb-head">
+        <span class="sb-tilde">~</span><span class="sb-path">byebyenotes</span>
+        <button id="sb-new" title="new note" aria-label="new note">+</button>
+      </div>
+      <nav id="sidebar-tree"></nav>
+      <div class="sb-foot"><span id="sb-count"></span></div>
+    </aside>
+    <div id="document-container"></div>
+  </div>
 
   <div id="status">
     <span id="status-mode" class="seg mode">ready</span>

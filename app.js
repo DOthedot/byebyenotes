@@ -151,6 +151,7 @@ let shareOverlay, shareCard, shareLinkEl, shareQr, capFill, capText, shareTtlEl,
 let shareTinyUrl = null;   // the URL currently shown in the share panel (tiny, or full-hash fallback)
 let shareReq = 0;          // monotonic token so a stale in-flight upload can't overwrite a newer one
 let fab;
+let sidebarEl, sidebarTree, sidebarCount, appShell, sbNew;
 
 // ── State encode / decode ─────────────────────────────────────────────────────
 function encodeState(state) {
@@ -372,6 +373,7 @@ function assignFolder(nid, folder) {
   } catch (e) {}
   schedulePush();
   renderRecent();
+  renderSidebar();
 }
 
 function deleteSnapshot(nid) {
@@ -380,6 +382,7 @@ function deleteSnapshot(nid) {
   } catch (e) {}
   schedulePush();
   renderRecent();
+  renderSidebar();
 }
 
 // Newest entry per note id wins; result sorted newest-first, capped.
@@ -437,6 +440,7 @@ async function syncPull() {
     }
   }
   if (emptyVisible) renderRecent();
+  renderSidebar();
 }
 
 function pushNow() {
@@ -1403,6 +1407,7 @@ function syncNow() {
       langs,
       t: Date.now(),
     });
+    renderSidebar();
   } else {
     history.replaceState(null, '', window.location.pathname);
     lastUrlLen = 0;
@@ -1673,6 +1678,7 @@ function renderRecent() {
       if (collapsed) collapsedFolders.delete(name);
       else collapsedFolders.add(name);
       renderRecent();
+      renderSidebar();
     });
     recentList.appendChild(head);
     if (!collapsed) {
@@ -1687,6 +1693,45 @@ function renderRecent() {
   // Rows were rebuilt: drop a now-out-of-range selection, else re-paint it.
   if (homeNavIndex >= homeNavRows().length) homeNavIndex = -1;
   applyHomeNavHighlight();
+}
+
+// The sidebar is a second view onto the same bbn.recent snapshots the home screen
+// renders, sharing collapsedFolders so both always agree about what is folded.
+function renderSidebar() {
+  if (!sidebarTree) return;
+  const snaps = loadSnapshots();
+  const rows  = buildTreeRows(snaps, collapsedFolders);
+  sidebarTree.innerHTML = '';
+  rows.forEach(r => {
+    const b = document.createElement('button');
+    b.className = 'sb-row' + (r.kind === 'folder' ? ' dir' : '');
+    if (r.kind === 'folder') {
+      b.dataset.folder = r.name;
+      b.innerHTML =
+        `<span class="sb-chev">${r.folded ? '▸' : '▾'}</span>` +
+        `<span class="sb-name">${escapeHtml(r.name)}/</span>` +
+        `<span class="sb-count">${r.count}</span>`;
+    } else {
+      b.dataset.nid = r.nid;
+      b.style.paddingLeft = (r.folder ? 31 : 10) + 'px';
+      b.innerHTML =
+        `<span class="sb-chev"></span>` +
+        `<span class="sb-name">${escapeHtml(r.title)}</span>`;
+    }
+    sidebarTree.appendChild(b);
+  });
+  sidebarCount.textContent = snaps.length + (snaps.length === 1 ? ' note' : ' notes');
+}
+
+function toggleSidebar(force) {
+  const open = force === undefined ? appShell.classList.contains('no-sidebar') : !!force;
+  appShell.classList.toggle('no-sidebar', !open);
+  const prefs = loadPrefs();
+  prefs.sidebar = Object.assign(normalizeSidebarCfg(prefs.sidebar), { open });
+  // Read side lands with /settings (applySidebarCfg on boot) — persisted here so the
+  // preference is already correct when that arrives.
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { t: Date.now() }))); } catch (e) {}
+  schedulePush();
 }
 
 // Rewrite an image markdown line after a drag (place/tilt) or resize
@@ -1975,6 +2020,13 @@ function attachEvents() {
       return;
     }
 
+    // Ctrl/Cmd+B — toggle the sidebar
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+      e.preventDefault();
+      toggleSidebar();
+      return;
+    }
+
     // / with no block focused — focus a block and open the same caret palette
     // as in-block, so / is always the inline insert/format menu (never bottom-left)
     if (e.key === '/' && !e.target.closest('.block-content') && e.target !== paletteSearch) {
@@ -2082,6 +2134,31 @@ function attachEvents() {
   });
 
   exampleLink.addEventListener('click', () => dissolveEmptyState());
+
+  // ── Sidebar ──
+  sidebarTree.addEventListener('click', (e) => {
+    const folder = e.target.closest('[data-folder]');
+    if (folder) {
+      const name = folder.dataset.folder;
+      if (collapsedFolders.has(name)) collapsedFolders.delete(name);
+      else collapsedFolders.add(name);
+      renderSidebar();
+      if (emptyVisible) renderRecent();
+      return;
+    }
+    const row = e.target.closest('[data-nid]');
+    if (!row) return;
+    const snap = loadSnapshots().find(s => s.nid === row.dataset.nid);
+    if (!snap) return;
+    if (!isOpenableSnapshot(snap)) {
+      flashCopied("couldn't open this note — its saved data is missing");
+      return;
+    }
+    dissolveEmptyState();
+    window.location.hash = snap.hash;
+  });
+
+  sbNew.addEventListener('click', () => newNote());
 
   // ── URL navigation (example link, recent notes, pasted links) ──
   window.addEventListener('hashchange', () => {
@@ -2550,6 +2627,13 @@ document.addEventListener('DOMContentLoaded', () => {
   paletteTitle   = document.getElementById('palette-title');
   paletteList    = document.getElementById('palette-list');
   emptyState     = document.getElementById('empty-state');
+  appShell       = document.getElementById('app-shell');
+  // Unused for now — consumed by /settings' sidebarCssVars() to set the --sb-* custom
+  // properties (wallpaper/opacity/blur/etc.) that #sidebar::before/::after read.
+  sidebarEl      = document.getElementById('sidebar');
+  sidebarTree    = document.getElementById('sidebar-tree');
+  sidebarCount   = document.getElementById('sb-count');
+  sbNew          = document.getElementById('sb-new');
   recentSection  = document.getElementById('recent-section');
   recentList     = document.getElementById('recent-list');
   exampleLink    = document.getElementById('example-link');
@@ -2586,6 +2670,7 @@ document.addEventListener('DOMContentLoaded', () => {
     maybeShowEmptyState();
   }
   updateStatus();
+  renderSidebar();
 
   if (syncKey) syncPull().catch(() => {});
 });
