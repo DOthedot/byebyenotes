@@ -93,6 +93,24 @@ const SNAP_KEY       = 'bbn.recent';
 const PREFS_KEY      = 'bbn.prefs';
 const SYNC_KEY_LS    = 'bbn.syncKey';
 const SNAP_MAX       = 30;
+
+// Sidebar background presets. Generated CSS art, not photographs: byebyenotes has
+// no asset pipeline, and a gradient costs ~200 bytes where an image costs hosting.
+const WALLPAPERS = [
+  { id: 'none',   name: 'none',       css: 'none' },
+  { id: 'dusk',   name: 'dusk',       css: 'radial-gradient(120% 80% at 20% 0%,var(--accent-soft),transparent 60%),linear-gradient(200deg,var(--bg-code),var(--bg-page) 70%)' },
+  { id: 'aurora', name: 'aurora',     css: 'radial-gradient(90% 60% at 15% 15%,#94e2d5,transparent 55%),radial-gradient(80% 70% at 85% 45%,#89b4fa,transparent 55%)' },
+  { id: 'sakura', name: 'sakura',     css: 'radial-gradient(70% 50% at 80% 10%,#f5c2e7,transparent 55%),radial-gradient(90% 60% at 10% 70%,#cba6f7,transparent 55%)' },
+  { id: 'ember',  name: 'ember',      css: 'radial-gradient(80% 55% at 25% 90%,#fab387,transparent 55%),radial-gradient(70% 50% at 90% 20%,#f38ba8,transparent 55%)' },
+  { id: 'abyss',  name: 'deep sea',   css: 'radial-gradient(100% 70% at 50% 100%,#74c7ec,transparent 60%)' },
+  { id: 'grid',   name: 'terminal',   css: 'repeating-linear-gradient(0deg,var(--accent-line) 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,var(--accent-line) 0 1px,transparent 1px 22px)' },
+  { id: 'stars',  name: 'starfield',  css: 'radial-gradient(1.4px 1.4px at 18% 22%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 62% 12%,var(--fg-dim),transparent),radial-gradient(1.6px 1.6px at 38% 62%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 82% 78%,var(--fg-dim),transparent)' },
+];
+
+const SIDEBAR_DEFAULTS = { wall: 'none', opacity: 45, blur: 2, bright: 100, sat: 110, scrim: 55, pos: 'center', open: true };
+const SIDEBAR_RANGES   = { opacity: [0, 100], blur: [0, 24], bright: [30, 180], sat: [0, 200], scrim: [0, 100] };
+const SIDEBAR_POSITIONS = ['top', 'center', 'bottom'];
+
 const SYNC_DELAY     = 800;
 const PUSH_DELAY     = 2000;
 
@@ -310,6 +328,37 @@ function buildTreeRows(snaps, folded) {
   });
   loose.forEach(s => rows.push(note(s, null)));
   return rows;
+}
+
+// Sidebar prefs arrive from localStorage and from another device via /api/sync, so
+// treat every field as hostile: clamp numbers, reject unknown ids, fill the gaps.
+function normalizeSidebarCfg(raw) {
+  const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  const cfg = Object.assign({}, SIDEBAR_DEFAULTS);
+  Object.keys(SIDEBAR_RANGES).forEach(k => {
+    const [lo, hi] = SIDEBAR_RANGES[k];
+    const n = (src[k] === null || src[k] === undefined) ? NaN : Number(src[k]);
+    cfg[k] = Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : SIDEBAR_DEFAULTS[k];
+  });
+  cfg.wall = WALLPAPERS.some(w => w.id === src.wall) ? src.wall : SIDEBAR_DEFAULTS.wall;
+  cfg.pos  = SIDEBAR_POSITIONS.indexOf(src.pos) >= 0 ? src.pos : SIDEBAR_DEFAULTS.pos;
+  cfg.open = src.open === undefined ? SIDEBAR_DEFAULTS.open : !!src.open;
+  return cfg;
+}
+
+// A normalized config becomes the custom properties the panel's ::before/::after read.
+// Filters live on those layers, never on #sidebar itself, so the file names stay sharp.
+function sidebarCssVars(cfg) {
+  const wall = WALLPAPERS.find(w => w.id === cfg.wall) || WALLPAPERS[0];
+  return {
+    '--sb-img':     wall.css,
+    '--sb-opacity': String(cfg.opacity / 100),
+    '--sb-blur':    cfg.blur + 'px',
+    '--sb-bright':  String(cfg.bright / 100),
+    '--sb-sat':     String(cfg.sat / 100),
+    '--sb-scrim':   String(cfg.scrim / 100),
+    '--sb-pos':     cfg.pos,
+  };
 }
 
 function assignFolder(nid, folder) {
@@ -2605,5 +2654,6 @@ if (typeof module !== 'undefined') {
     langIcon, langBadgeHtml, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
+    normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS,
   };
 }
