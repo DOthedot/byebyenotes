@@ -113,6 +113,14 @@ const WALLPAPERS = [
 const SIDEBAR_DEFAULTS = { wall: 'none', opacity: 45, blur: 2, bright: 100, sat: 110, scrim: 55, pos: 'center', open: true };
 const SIDEBAR_RANGES   = { opacity: [0, 100], blur: [0, 24], bright: [30, 180], sat: [0, 200], scrim: [0, 100] };
 const SIDEBAR_POSITIONS = ['top', 'center', 'bottom'];
+// What "reset background" restores — the appearance fields and nothing else. `open`
+// is a deliberate user choice (⌘B / "hide sidebar"), not part of the wallpaper look.
+const SIDEBAR_LOOK_DEFAULTS = Object.fromEntries(
+  Object.entries(SIDEBAR_DEFAULTS).filter(([k]) => k !== 'open')
+);
+// Below this viewport width the panel is display:none (see the media query in
+// style.css) — the two must stay in step or ⌘B writes a state nobody can see.
+const SIDEBAR_BREAKPOINT = 820;
 
 const SYNC_DELAY     = 800;
 const PUSH_DELAY     = 2000;
@@ -890,6 +898,7 @@ function buildHelpList() {
     { label: 'command palette',   kbd: '⌘K' },
     { label: 'copy link + share', kbd: '⌘⇧C' },
     { label: 'focus mode',        kbd: '⌘.' },
+    { label: 'toggle sidebar',    kbd: '⌘B' },
     { label: 'insert / format menu', kbd: '/' },
     { label: 'new line',          kbd: 'Enter' },
     { label: 'exit block',        kbd: '⇧Enter' },
@@ -931,8 +940,14 @@ function openPalette(mode, opts = {}) {
   } else {
     revertPreview();
   }
+  // opts.keep: this is a refresh of the palette we're already in, not a fresh open —
+  // keep the selected row and the typed filter. The /settings ± commands re-open the
+  // palette to redraw the values they just changed, and stepping opacity/blur is only
+  // useful repeated: without this, Enter #2 would fire row 0 ("hide sidebar") instead.
+  const keptIndex = opts.keep ? paletteIndex : 0;
+  const keptQuery = opts.keep ? paletteSearch.value : '';
   paletteMode  = mode;
-  paletteIndex = 0;
+  paletteIndex = keptIndex;
   paletteOpen  = true;
   if (opts.anchor !== undefined) {
     paletteAnchor = opts.anchor;
@@ -1017,12 +1032,17 @@ function openPalette(mode, opts = {}) {
     ];
   }
 
-  paletteSearch.value       = '';
+  // A kept filter can stop matching when the row it matched relabels itself ("hide
+  // sidebar" ⇄ "show sidebar"); an empty palette is worse than a dropped filter.
+  const keptRows = filterPaletteItems(paletteItems, keptQuery);
+  const keepable = keptRows.length > 0;
+  paletteSearch.value       = keepable ? keptQuery : '';
   paletteSearch.placeholder = mode === 'filename' ? 'enter filename...'
     : mode === 'syncPhrase' ? 'enter a passphrase (6+ chars)...'
     : mode === 'folder' ? 'pick, or type a new folder name...'
     : 'search...';
-  renderPaletteList(paletteItems);
+  // renderPaletteList clamps paletteIndex into the (possibly filtered) list.
+  renderPaletteList(keepable ? keptRows : paletteItems);
   paletteOverlay.classList.remove('hidden');
   // In theme/font/settings mode the document (or sidebar wallpaper) is the
   // preview — don't dim/blur it
@@ -1116,17 +1136,22 @@ function renderPaletteList(items) {
   positionPalette();
 }
 
+// The subset of rows matching a typed query. Pure, and split out of filterPalette so
+// openPalette can re-apply a live filter (opts.keep) without also resetting the
+// selected row — typing is what should jump back to the top, a refresh isn't.
+function filterPaletteItems(items, query) {
+  const q = (query || '').toLowerCase().replace(/^\//, '');
+  if (!q) return items;
+  return items.filter(item =>
+    (item.label || '').toLowerCase().includes(q) ||
+    (item.desc || '').toLowerCase().includes(q) ||
+    (item.hint || '').toLowerCase().includes(q)
+  );
+}
+
 function filterPalette(query) {
-  const q = query.toLowerCase().replace(/^\//, '');
-  const filtered = q
-    ? paletteItems.filter(item =>
-        (item.label || '').toLowerCase().includes(q) ||
-        (item.desc || '').toLowerCase().includes(q) ||
-        (item.hint || '').toLowerCase().includes(q)
-      )
-    : paletteItems;
   paletteIndex = 0;
-  renderPaletteList(filtered);
+  renderPaletteList(filterPaletteItems(paletteItems, query));
   previewHighlighted();
 }
 
@@ -1298,16 +1323,7 @@ function confirmPalette() {
       maybeShowEmptyState();
       return;
     }
-    if (selected.id === 'newNote') {
-      if (saveBeforeNew) {
-        pendingExport = 'newNote';
-        openPalette('filename');
-      } else {
-        closePalette();
-        newNote();
-      }
-      return;
-    }
+    if (selected.id === 'newNote') { startNewNote(); return; }
     if (selected.id === 'saveBeforeNew') {
       saveBeforeNew = !saveBeforeNew;
       closePalette();
@@ -1398,13 +1414,21 @@ function confirmPalette() {
     pendingExport = selected.id;
     openPalette('filename');
   } else if (paletteMode === 'settings') {
-    if (selected.id === 'sb-toggle') { saveSidebarCfg({ open: !normalizeSidebarCfg(loadPrefs().sidebar).open }); openPalette('settings'); return; }
-    if (selected.id.startsWith('sb-wall:')) { saveSidebarCfg({ wall: selected.id.slice(8) }); openPalette('settings'); return; }
-    if (selected.id === 'sb-opacity-down') { stepSidebar('opacity', -10); openPalette('settings'); return; }
-    if (selected.id === 'sb-opacity-up')   { stepSidebar('opacity', 10); openPalette('settings'); return; }
-    if (selected.id === 'sb-blur')    { stepSidebar('blur', 2); openPalette('settings'); return; }
-    if (selected.id === 'sb-sharp')   { stepSidebar('blur', -2); openPalette('settings'); return; }
-    if (selected.id === 'sb-reset')   { saveSidebarCfg(SIDEBAR_DEFAULTS); openPalette('settings'); return; }
+    // Every branch re-opens 'settings' to redraw the values it just changed; { keep: true }
+    // holds the selection (and any typed filter) so the ± rows can be pressed repeatedly.
+    const refresh = () => openPalette('settings', { keep: true });
+    // Through toggleSidebar, not saveSidebarCfg, so `open` has exactly one gate: the
+    // palette is reachable on a phone via #fab, and flipping `open` there would persist
+    // (and sync to the desktop) a change nobody can see the panel make.
+    if (selected.id === 'sb-toggle') { toggleSidebar(); refresh(); return; }
+    if (selected.id.startsWith('sb-wall:')) { saveSidebarCfg({ wall: selected.id.slice(8) }); refresh(); return; }
+    if (selected.id === 'sb-opacity-down') { stepSidebar('opacity', -10); refresh(); return; }
+    if (selected.id === 'sb-opacity-up')   { stepSidebar('opacity', 10); refresh(); return; }
+    if (selected.id === 'sb-blur')    { stepSidebar('blur', 2); refresh(); return; }
+    if (selected.id === 'sb-sharp')   { stepSidebar('blur', -2); refresh(); return; }
+    // Appearance only — SIDEBAR_LOOK_DEFAULTS omits `open`, so resetting the background
+    // must not pop a deliberately hidden panel back open.
+    if (selected.id === 'sb-reset')   { saveSidebarCfg(SIDEBAR_LOOK_DEFAULTS); refresh(); return; }
   }
   updateStatus();
 }
@@ -1789,6 +1813,9 @@ function renderSidebar() {
 }
 
 function toggleSidebar(force) {
+  // On a narrow viewport the panel is hidden by media query, so flipping it would
+  // persist — and sync to the user's other devices — a state they can't see change.
+  if (window.innerWidth <= SIDEBAR_BREAKPOINT) return;
   const open = force === undefined ? appShell.classList.contains('no-sidebar') : !!force;
   appShell.classList.toggle('no-sidebar', !open);
   const prefs = loadPrefs();
@@ -1927,6 +1954,24 @@ function exportHtmlAs(filename) {
 <body>Opening byebyenotes...</body>
 </html>`;
   downloadBlob(new Blob([html], { type: 'text/html' }), filename + '.html');
+}
+
+// The single entry point for "start a fresh note", shared by the /newNote command and
+// the sidebar's + button. newNote() itself is destructive — it swaps noteId, throws
+// away blocks[] and clears the hash — so both guards belong here, not at the call site:
+//   1. syncNow() flushes the current note into the URL and bbn.recent now, instead of
+//      leaving it to the 800ms scheduleSync debounce a click can easily beat.
+//   2. /save_before_new routes through the filename prompt the user opted into.
+// Callable with the palette open (a command) or closed (the + button).
+function startNewNote() {
+  syncNow();
+  if (saveBeforeNew) {
+    pendingExport = 'newNote';
+    openPalette('filename');
+    return;
+  }
+  if (paletteOpen) closePalette();
+  newNote();
 }
 
 function newNote() {
@@ -2223,7 +2268,8 @@ function attachEvents() {
     window.location.hash = snap.hash;
   });
 
-  sbNew.addEventListener('click', () => newNote());
+  // Same guarded path as /newNote — never the raw, unrecoverable newNote().
+  sbNew.addEventListener('click', () => startNewNote());
 
   // ── URL navigation (example link, recent notes, pasted links) ──
   window.addEventListener('hashchange', () => {
@@ -2715,7 +2761,7 @@ document.addEventListener('DOMContentLoaded', () => {
   shareTtlEl.innerHTML = TINY_EXPIRY
     .map(o => `<option value="${o.ttl}">${o.label}</option>`).join('');
 
-  statusHint.textContent = '/ insert · ⌘K commands · ⌘⇧C share · ⌘. focus';
+  statusHint.textContent = '/ insert · ⌘K commands · ⌘⇧C share · ⌘. focus · ⌘B panel';
   exampleLink.href = '#' + encodeState(EXAMPLE_STATE);
 
   try {
@@ -2805,6 +2851,7 @@ if (typeof module !== 'undefined') {
     langIcon, langBadgeHtml, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
-    normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS,
+    normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS,
+    filterPaletteItems,
   };
 }

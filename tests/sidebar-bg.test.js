@@ -43,6 +43,25 @@ test('open is coerced to a boolean', () => {
   expect(mod.normalizeSidebarCfg({ open: 'yes' }).open).toBe(true);
 });
 
+test('SIDEBAR_LOOK_DEFAULTS covers every appearance field but not open', () => {
+  expect(mod.SIDEBAR_LOOK_DEFAULTS).not.toHaveProperty('open');
+  expect(Object.keys(mod.SIDEBAR_LOOK_DEFAULTS).sort())
+    .toEqual(['blur', 'bright', 'opacity', 'pos', 'sat', 'scrim', 'wall']);
+  Object.entries(mod.SIDEBAR_LOOK_DEFAULTS).forEach(([k, v]) => {
+    expect(v).toBe(mod.SIDEBAR_DEFAULTS[k]);
+  });
+});
+
+test('resetting the look leaves a hidden sidebar hidden', () => {
+  // What "reset background" now patches onto the live config: appearance snaps back
+  // to defaults, `open: false` survives.
+  const hidden = mod.normalizeSidebarCfg({ open: false, opacity: 90, blur: 8, wall: mod.WALLPAPERS[1].id });
+  const after  = mod.normalizeSidebarCfg(Object.assign({}, hidden, mod.SIDEBAR_LOOK_DEFAULTS));
+  expect(after.open).toBe(false);
+  expect(after.opacity).toBe(mod.SIDEBAR_DEFAULTS.opacity);
+  expect(after.wall).toBe('none');
+});
+
 test('every wallpaper has an id, a name and a css string; none is first', () => {
   expect(mod.WALLPAPERS[0].id).toBe('none');
   for (const w of mod.WALLPAPERS) {

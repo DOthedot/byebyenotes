@@ -1237,9 +1237,24 @@ body.focus-mode .gutter { display: none; }
 /* #document-container used to be body's flex:1 child directly; wrapping it in
    #app-shell moved that flex-grow responsibility here, or the whole shell
    collapses to content height instead of filling the space above #status. */
-#app-shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 0; flex: 1; }
+/* grid-template-rows is not decoration: the single implicit row would be `auto`, and
+   it only stays capped at the flex-resolved height because both children happen to be
+   scroll containers (which zeroes a grid item's automatic minimum size). The moment
+   someone sets #sidebar { overflow: visible } — say, to hang a context menu off a row —
+   the shell would overflow and the editor would grow under #status with no scrollbar.
+   minmax(0, 1fr) makes that independent of the children. */
+#app-shell {
+  display: grid; grid-template-columns: 264px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr); min-height: 0; flex: 1;
+}
 #app-shell.no-sidebar { grid-template-columns: 0 minmax(0, 1fr); }
 #app-shell.no-sidebar #sidebar { display: none; }
+
+/* Focus mode dims every inactive block to near-invisible; a 264px panel listing every
+   note title beside it defeats the point. Hide it in CSS only, so the persisted `open`
+   preference is untouched and the panel comes back on exit. */
+body.focus-mode #app-shell { grid-template-columns: 0 minmax(0, 1fr); }
+body.focus-mode #sidebar { display: none; }
 
 /* Pin both children to explicit tracks: #sidebar going display:none removes it
    from grid flow, and without an explicit column #document-container's auto
