@@ -4,6 +4,7 @@ const FONTS  = ['jetbrains-mono', 'fira-code', 'source-code-pro', 'ibm-plex-mono
 const THEMES = [
   'monokai', 'github-dark', 'nord', 'solarized-light', 'dracula', 'one-dark', 'tokyo-night',
   'github-light', 'atom-one-light', 'gruvbox-light', 'solarized-dark', 'gruvbox-dark',
+  'catppuccin-mocha',
 ];
 
 // Light vs dark, used to label theme rows (☀/☾) and sort the picker light-first.
@@ -21,6 +22,7 @@ const THEME_MODE = {
   'gruvbox-light':   'light',
   'solarized-dark':  'dark',
   'gruvbox-dark':    'dark',
+  'catppuccin-mocha': 'dark',
 };
 function themeMode(t) { return THEME_MODE[t] === 'light' ? 'light' : 'dark'; }
 function sortThemesByMode(themes, modeMap) {
@@ -85,6 +87,7 @@ const HLJS_THEME_URLS = {
   'gruvbox-light':   'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/gruvbox-light-medium.min.css',
   'solarized-dark':  'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/solarized-dark.min.css',
   'gruvbox-dark':    'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/gruvbox-dark-medium.min.css',
+  'catppuccin-mocha': 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/tomorrow-night.min.css',
 };
 
 const URL_SAFE_LIMIT = 8000;   // conservative cross-browser URL length budget

@@ -173,6 +173,19 @@
   --cursor-color: #fabd2f;
 }
 
+:root[data-theme="catppuccin-mocha"] {
+  --bg-page:     #1e1e2e;
+  --bg-raised:   #181825;
+  --bg-code:     #11111b;
+  --fg:          #cdd6f4;
+  --fg-dim:      #a6adc8;
+  --fg-faint:    #6c7086;
+  --accent:      #89b4fa;
+  --border:      #45475a;
+  --border-soft: #313244;
+  --cursor-color: #89b4fa;
+}
+
 /* ── Page layout ───────────────────────────────────── */
 html, body {
   height: 100%;
