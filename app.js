@@ -468,6 +468,10 @@ async function syncPull() {
       if (THEMES.includes(data.prefs.theme)) applyTheme(data.prefs.theme);
       if (FONTS.includes(data.prefs.font))   applyFont(data.prefs.font);
     }
+    // Sidebar background/opacity/blur isn't tied to the note on screen, so it
+    // always applies live — pulled through normalizeSidebarCfg since a remote
+    // config must never reach a CSS property unvalidated.
+    if (data.prefs.sidebar) applySidebarCfg(normalizeSidebarCfg(data.prefs.sidebar));
   }
   if (emptyVisible) renderRecent();
   renderSidebar();
@@ -1017,8 +1021,9 @@ function openPalette(mode, opts = {}) {
     : 'search...';
   renderPaletteList(paletteItems);
   paletteOverlay.classList.remove('hidden');
-  // In theme/font mode the document is the preview — don't dim/blur it
-  paletteOverlay.classList.toggle('preview', mode === 'theme' || mode === 'font');
+  // In theme/font/settings mode the document (or sidebar wallpaper) is the
+  // preview — don't dim/blur it
+  paletteOverlay.classList.toggle('preview', mode === 'theme' || mode === 'font' || mode === 'settings');
   positionPalette();
   paletteSearch.focus();
   updateStatus();

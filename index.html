@@ -61,6 +61,26 @@
     <div id="document-container"></div>
   </div>
 
+  <script>
+    // Prevents a flash-of-open-sidebar on reload. app.js normally restores the
+    // sidebar via applySidebarCfg(normalizeSidebarCfg(...)) in DOMContentLoaded,
+    // but the CDN <script> tags below are render-blocking and not deferred, so
+    // the browser can paint #app-shell (default: sidebar open) well before that
+    // handler runs. This tiny inline script duplicates just the open/closed
+    // read — it can't call normalizeSidebarCfg() because app.js hasn't loaded
+    // yet. It defaults to open (matching SIDEBAR_DEFAULTS.open === true) on any
+    // doubt: prefs missing, malformed JSON, or an older shape with no sidebar
+    // key. The later DOMContentLoaded call remains the authority for the full
+    // config, including the --sb-* custom properties.
+    try {
+      var bbnPrefsRaw = localStorage.getItem('bbn.prefs');
+      var bbnPrefs = bbnPrefsRaw ? JSON.parse(bbnPrefsRaw) : null;
+      if (bbnPrefs && bbnPrefs.sidebar && bbnPrefs.sidebar.open === false) {
+        document.getElementById('app-shell').classList.add('no-sidebar');
+      }
+    } catch (e) {}
+  </script>
+
   <div id="status">
     <span id="status-mode" class="seg mode">ready</span>
     <span id="status-lang" class="seg"></span>
