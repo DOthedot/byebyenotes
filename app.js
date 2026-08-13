@@ -362,6 +362,35 @@ function sidebarCssVars(cfg) {
   };
 }
 
+// Writes a normalized config onto #sidebar as custom properties. The consumer of
+// sidebarEl (cached but otherwise unused until /settings existed).
+function applySidebarCfg(cfg) {
+  if (!sidebarEl) return;
+  const vars = sidebarCssVars(cfg);
+  Object.keys(vars).forEach(k => sidebarEl.style.setProperty(k, vars[k]));
+  appShell.classList.toggle('no-sidebar', !cfg.open);
+}
+
+// Merges a partial change into the saved sidebar config, persists, and re-applies —
+// the write side of the same prefs blob theme/font already round-trip through.
+function saveSidebarCfg(patch) {
+  const prefs = loadPrefs();
+  const cfg = normalizeSidebarCfg(Object.assign(normalizeSidebarCfg(prefs.sidebar), patch));
+  prefs.sidebar = cfg;
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { t: Date.now() }))); } catch (e) {}
+  applySidebarCfg(cfg);
+  pushNow();
+  return cfg;
+}
+
+// Reads the current sidebar config, nudges one ranged field by delta, and saves.
+// Extracted so the four ± palette commands (opacity/blur step) share one path
+// instead of repeating load→normalize→save.
+function stepSidebar(key, delta) {
+  const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
+  return saveSidebarCfg({ [key]: cfg[key] + delta });
+}
+
 function assignFolder(nid, folder) {
   try {
     const list = loadSnapshots();
@@ -407,7 +436,8 @@ function loadPrefs() {
 
 function savePrefs() {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: currentTheme, font: currentFont, t: Date.now() }));
+    const prefs = loadPrefs();
+    localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { theme: currentTheme, font: currentFont, t: Date.now() })));
   } catch (e) { /* fine */ }
   pushNow();   // prefs changes are rare and easily lost to the debounce — push at once
 }
@@ -774,6 +804,7 @@ function buildCommandList() {
     { id: 'focus',  label: '/focus',  ico: '◎',  desc: focusMode ? 'exit focus mode' : 'distraction-free writing', kbd: '⌘.' },
     { id: 'theme',  label: '/theme',  ico: '◐',  desc: 'change theme' },
     { id: 'font',   label: '/font',   ico: 'Aa', desc: 'change font' },
+    { id: 'settings', label: '/settings', ico: '⚙', desc: 'sidebar background & panel' },
     { id: 'export', label: '/export', ico: '⇩',  desc: 'md · pdf · docx · html' },
     { id: 'sync',   label: '/sync',   ico: '⟲',  desc: syncKey ? 'turn off cross-device sync' : 'sync notes across devices', hint: syncKey ? 'on' : null },
     { id: 'delete', label: '/delete', ico: '✕',  desc: 'delete current block' },
@@ -959,6 +990,24 @@ function openPalette(mode, opts = {}) {
       { id: '__none', label: 'no folder', ico: '—', desc: 'top level' },
       ...folders.map(f => ({ id: f, label: f + '/', ico: '▸' })),
     ];
+  } else if (mode === 'settings') {
+    const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
+    paletteTitle.textContent = 'SIDEBAR';
+    paletteItems = [
+      { id: 'sb-toggle', label: cfg.open ? 'hide sidebar' : 'show sidebar', ico: '▤', desc: 'toggle the notes panel' },
+      ...WALLPAPERS.map(w => ({
+        id: 'sb-wall:' + w.id,
+        label: w.name,
+        ico: '▨',
+        desc: 'background',
+        hint: cfg.wall === w.id ? 'on' : null,
+      })),
+      { id: 'sb-opacity-down', label: 'dimmer background',  ico: '−', desc: `opacity ${cfg.opacity}%` },
+      { id: 'sb-opacity-up',   label: 'brighter background', ico: '+', desc: `opacity ${cfg.opacity}%` },
+      { id: 'sb-blur',  label: 'more blur',          ico: '≈', desc: `blur ${cfg.blur}px` },
+      { id: 'sb-sharp', label: 'less blur',          ico: '≡', desc: `blur ${cfg.blur}px` },
+      { id: 'sb-reset', label: 'reset background',   ico: '⟲', desc: 'back to defaults' },
+    ];
   }
 
   paletteSearch.value       = '';
@@ -1112,7 +1161,7 @@ function closePalette() {
 // 'help' backs out to the command menu (matching themes/fonts) instead of dying.
 function paletteEscTarget(mode, hasAnchor) {
   if (mode === 'command' || mode === 'insert' || mode === 'format') return 'close';
-  if (mode === 'help') return 'command';
+  if (mode === 'help' || mode === 'settings') return 'command';
   if (mode === 'lang' && hasAnchor) return 'insert';
   return 'command';
 }
@@ -1340,6 +1389,14 @@ function confirmPalette() {
   } else if (paletteMode === 'export') {
     pendingExport = selected.id;
     openPalette('filename');
+  } else if (paletteMode === 'settings') {
+    if (selected.id === 'sb-toggle') { saveSidebarCfg({ open: !normalizeSidebarCfg(loadPrefs().sidebar).open }); openPalette('settings'); return; }
+    if (selected.id.startsWith('sb-wall:')) { saveSidebarCfg({ wall: selected.id.slice(8) }); openPalette('settings'); return; }
+    if (selected.id === 'sb-opacity-down') { stepSidebar('opacity', -10); openPalette('settings'); return; }
+    if (selected.id === 'sb-opacity-up')   { stepSidebar('opacity', 10); openPalette('settings'); return; }
+    if (selected.id === 'sb-blur')    { stepSidebar('blur', 2); openPalette('settings'); return; }
+    if (selected.id === 'sb-sharp')   { stepSidebar('blur', -2); openPalette('settings'); return; }
+    if (selected.id === 'sb-reset')   { saveSidebarCfg(SIDEBAR_DEFAULTS); openPalette('settings'); return; }
   }
   updateStatus();
 }
@@ -2628,8 +2685,8 @@ document.addEventListener('DOMContentLoaded', () => {
   paletteList    = document.getElementById('palette-list');
   emptyState     = document.getElementById('empty-state');
   appShell       = document.getElementById('app-shell');
-  // Unused for now — consumed by /settings' sidebarCssVars() to set the --sb-* custom
-  // properties (wallpaper/opacity/blur/etc.) that #sidebar::before/::after read.
+  // Consumed by applySidebarCfg() to set the --sb-* custom properties
+  // (wallpaper/opacity/blur/etc.) that #sidebar::before/::after read.
   sidebarEl      = document.getElementById('sidebar');
   sidebarTree    = document.getElementById('sidebar-tree');
   sidebarCount   = document.getElementById('sb-count');
@@ -2671,6 +2728,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   updateStatus();
   renderSidebar();
+  applySidebarCfg(normalizeSidebarCfg(loadPrefs().sidebar));
 
   if (syncKey) syncPull().catch(() => {});
 });

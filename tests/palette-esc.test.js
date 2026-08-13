@@ -25,3 +25,7 @@ test('unanchored lang / other modes ESC returns to the command menu', () => {
   expect(mod.paletteEscTarget('lang', false)).toBe('command');
   expect(mod.paletteEscTarget('theme', false)).toBe('command');
 });
+
+test('settings backs out to the command menu, like help', () => {
+  expect(mod.paletteEscTarget('settings', false)).toBe('command');
+});
