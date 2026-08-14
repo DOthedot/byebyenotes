@@ -1,0 +1,22 @@
+# Everything that must never reach the image. The Dockerfile COPYs explicitly,
+# so this is a backstop rather than the primary filter.
+.git
+.github
+.claude
+.superpowers
+.worktrees
+.playwright-mcp
+node_modules
+tests
+docs
+coverage
+*.md
+!api/README.md
+!assets/README.md
+.env
+.env.*
+!.env.example
+.DS_Store
+Dockerfile
+.dockerignore
+vercel.json

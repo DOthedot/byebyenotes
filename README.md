@@ -93,6 +93,42 @@ Sync needs a KV store attached to the Vercel project:
 
 Without a KV store, `/api/sync` returns 503 and the app quietly stays local-only.
 
+## Deploying with Docker (Railway, Fly, a VPS)
+
+Vercel is the primary target, but the app also runs as a container. `server.js` is a
+zero-dependency Node adapter that supplies the two things Vercel provides for free:
+static hosting with the SPA rewrite from `vercel.json`, and the enhanced `req`/`res`
+that `api/*.js` expect (`req.query`, `req.body`, `res.status().json()`). The handlers
+themselves are untouched, so the same files keep working on Vercel.
+
+```bash
+docker build -t byebyenotes .
+docker run -p 3000:3000 byebyenotes          # → http://localhost:3000
+```
+
+Or without Docker: `node server.js` (Node 18+, since `api/*.js` use global `fetch`).
+
+**On Railway:** point it at the repo — `railway.json` selects the Dockerfile and sets
+`/healthz` as the health check. Railway injects `PORT`; the server reads it.
+
+**Sync, images and tiny links need a KV store.** `api/*.js` speak the **Upstash REST
+API**, not the Redis wire protocol — so Railway's own Redis plugin will *not* work.
+Add an [Upstash Redis](https://upstash.com) database (free tier is plenty) and set:
+
+| Variable | |
+|----------|---|
+| `KV_REST_API_URL` | Upstash REST URL (`UPSTASH_REDIS_REST_URL` also accepted) |
+| `KV_REST_API_TOKEN` | Upstash REST token (`UPSTASH_REDIS_REST_TOKEN` also accepted) |
+
+Without them the app still runs completely — notes live in the URL — and `/sync`,
+image upload and tiny links return 503, exactly as on Vercel with no KV attached.
+`GET /healthz` reports whether KV is configured.
+
+The container serves an **allowlist** of static files (`index.html`, `app.js`,
+`style.css`, `/assets/**`); everything else falls through to the SPA shell. That is
+deliberate — the working directory also contains `server.js`, `package.json` and
+`api/*.js`, which Vercel would never expose.
+
 ## Tech stack
 
 - Vanilla JS — no framework, no build step
