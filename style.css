@@ -245,17 +245,24 @@ button { font-family: inherit; }
   border-radius: var(--radius);
   transition: background 0.15s var(--ease);
 }
-.block + .block { margin-top: 2px; }
+/* Consecutive text blocks must read as one document, not a stack of cards, so no
+   inter-block gap. Code blocks re-introduce their own margin below — they are a
+   genuinely separate object and should still sit apart. */
+.block + .block { margin-top: 0; }
 
 @media (hover: hover) {
-  .block:hover { background: color-mix(in srgb, var(--fg) 2.5%, transparent); }
+  /* Only code blocks get a hover tint. Tinting a text block advertised a boundary
+     that shouldn't exist once prose flows continuously (issue #30 follow-on). */
+  .code-block:hover { background: color-mix(in srgb, var(--fg) 2.5%, transparent); }
 }
 
 /* hover gutter controls */
 .gutter {
   position: absolute;
   left: -104px;
-  top: 6px;
+  /* Aligned to the first line box now that .block-content has no top padding;
+     6px was measured against the old 8px-padded block. */
+  top: -1px;
   display: flex;
   gap: 2px;
   opacity: 0;
@@ -316,8 +323,10 @@ button { font-family: inherit; }
 .text-block .block-content {
   background: transparent;
   color: var(--fg);
-  padding: 8px 16px;
-  min-height: 2.4em;
+  /* No vertical padding: with it, consecutive blocks sat 16px apart while lines
+     inside a block sat at line-height — the visual tell of a block editor. */
+  padding: 0 16px;
+  min-height: calc(var(--font-size) * var(--line-height));
   white-space: pre-wrap;
   word-wrap: break-word;
   outline: none;
@@ -336,8 +345,10 @@ button { font-family: inherit; }
 /* rendered markdown layer — shown when block not being edited */
 .md-layer {
   display: none;
-  padding: 8px 16px;
-  min-height: 2.4em;
+  /* Must match .block-content exactly — the two layers swap in place, and any
+     difference makes text jump when a block gains or loses focus. */
+  padding: 0 16px;
+  min-height: calc(var(--font-size) * var(--line-height));
   cursor: text;
   word-wrap: break-word;
 }
@@ -463,6 +474,7 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
 
 /* ── Code block ────────────────────────────────────── */
 .code-block {
+  margin: 10px 0;
   background: var(--bg-code);
   border: 1px solid var(--border-soft);
   border-left: 2px solid var(--accent);
@@ -1222,8 +1234,11 @@ body.focus-mode .block.active.code-block::before {
   content: '';
   position: absolute;
   left: -2px;
-  top: 10px;
-  bottom: 10px;
+  /* Was a fixed 10px inset, sized for the old 8px-padded block; a one-line block is
+     now ~22px, which left a ~2px stub. A small proportional inset keeps the bar
+     visible at one line and still short of the block's full height when it grows. */
+  top: 3px;
+  bottom: 3px;
   width: 2px;
   border-radius: 2px;
   background: var(--accent);
@@ -1421,13 +1436,18 @@ body.focus-mode #tabline { display: none; }
    Numbers live inside each block so they inherit its font and line-height and
    stay aligned; the tail fills the rest of the viewport with tildes. */
 .blk-lines {
+  /* top:0 now lands on the first line because .block-content no longer has vertical
+     padding. font-size stays small for legibility, but the row height is locked to
+     the content's computed line box — at 13px/1.6 the numbers drifted 1.6px per line
+     against 14px/1.6 text, so by line 20 they were a full row out (issue #30). */
   position: absolute; left: -46px; top: 0; width: 34px;
   display: flex; flex-direction: column; align-items: flex-end;
-  color: var(--fg-faint); font-size: 13px; text-align: right;
+  color: var(--fg-faint); font-size: 12.5px; text-align: right;
+  line-height: calc(var(--font-size) * var(--line-height));
   user-select: none; pointer-events: none;
   font-variant-numeric: tabular-nums;
 }
-.blk-lines span { line-height: inherit; }
+.blk-lines span { line-height: inherit; height: calc(var(--font-size) * var(--line-height)); }
 .block.active .blk-lines span:first-child { color: var(--accent); }
 
 /* ── Settings float: wallpaper swatches ────────────────────────────────────
