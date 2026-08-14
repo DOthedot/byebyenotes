@@ -1,7 +1,10 @@
 .worktrees/
 node_modules/
 .playwright-mcp/
-docs/
+# Keep generated/specification docs local, but retain the shared issue log.
+docs/*
+!docs/issues/
+!docs/issues/**
 
 # Local secrets — never commit (e.g. GITHUB_TOKEN for the pick-issues skill)
 .env
@@ -14,3 +17,6 @@ docs/
 !.claude/hooks/
 !.claude/settings.json
 .claude/reviews/
+
+# macOS finder metadata — never useful in the repo
+.DS_Store
