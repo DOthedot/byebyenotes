@@ -38,7 +38,14 @@ test('COMMANDS section lists every command from buildCommandList except help its
 
 test('SHORTCUTS section documents the core key bindings', () => {
   const kbds = section(mod.buildHelpList(), 'SHORTCUTS').map(i => i.kbd);
-  ['⌘K', '⌘⇧C', '⌘.', '/', 'Enter', '⇧Enter'].forEach(k => expect(kbds).toContain(k));
+  ['⌘K', '⌘⇧C', '⌘.', '⌘B', '/', 'Enter', '⇧Enter'].forEach(k => expect(kbds).toContain(k));
+});
+
+test('SHORTCUTS documents the sidebar toggle, the only way to discover ⌘B', () => {
+  const rows = section(mod.buildHelpList(), 'SHORTCUTS');
+  const row = rows.find(r => r.kbd === '⌘B');
+  expect(row).toBeDefined();
+  expect(row.label).toContain('sidebar');
 });
 
 test('FORMATTING section documents markdown syntax', () => {

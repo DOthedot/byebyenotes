@@ -4,6 +4,7 @@ const FONTS  = ['jetbrains-mono', 'fira-code', 'source-code-pro', 'ibm-plex-mono
 const THEMES = [
   'monokai', 'github-dark', 'nord', 'solarized-light', 'dracula', 'one-dark', 'tokyo-night',
   'github-light', 'atom-one-light', 'gruvbox-light', 'solarized-dark', 'gruvbox-dark',
+  'catppuccin-mocha',
 ];
 
 // Light vs dark, used to label theme rows (☀/☾) and sort the picker light-first.
@@ -21,6 +22,7 @@ const THEME_MODE = {
   'gruvbox-light':   'light',
   'solarized-dark':  'dark',
   'gruvbox-dark':    'dark',
+  'catppuccin-mocha': 'dark',
 };
 function themeMode(t) { return THEME_MODE[t] === 'light' ? 'light' : 'dark'; }
 function sortThemesByMode(themes, modeMap) {
@@ -85,6 +87,7 @@ const HLJS_THEME_URLS = {
   'gruvbox-light':   'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/gruvbox-light-medium.min.css',
   'solarized-dark':  'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/solarized-dark.min.css',
   'gruvbox-dark':    'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/gruvbox-dark-medium.min.css',
+  'catppuccin-mocha': 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/tomorrow-night.min.css',
 };
 
 const URL_SAFE_LIMIT = 8000;   // conservative cross-browser URL length budget
@@ -93,6 +96,42 @@ const SNAP_KEY       = 'bbn.recent';
 const PREFS_KEY      = 'bbn.prefs';
 const SYNC_KEY_LS    = 'bbn.syncKey';
 const SNAP_MAX       = 30;
+
+// Sidebar background presets. Generated CSS art, not photographs: byebyenotes has
+// no asset pipeline, and a gradient costs ~200 bytes where an image costs hosting.
+const WALLPAPERS = [
+  { id: 'none',   name: 'none',       css: 'none' },
+  // Photographic walls. Absolute paths so they resolve on /s/<id> tiny links too,
+  // the same reason index.html loads its assets absolutely (issue #17). Single quotes
+  // inside url() are load-bearing: these strings are interpolated into a style="..."
+  // attribute by the swatch grid, and a double quote there truncates the attribute.
+  { id: 'glory',  name: 'glory',      css: "url('/assets/wall-glory.jpg')",      photo: true },
+  { id: 'crown',  name: 'coronation', css: "url('/assets/wall-coronation.jpg')", photo: true },
+  { id: 'seraph', name: 'seraph',     css: "url('/assets/wall-seraph.jpg')",     photo: true },
+  { id: 'atlas',  name: 'atlas',      css: "url('/assets/wall-atlas.jpg')",      photo: true },
+  { id: 'trust',  name: 'trust',      css: "url('/assets/wall-trust.jpg')",      photo: true },
+  { id: 'dusk',   name: 'dusk',       css: 'radial-gradient(120% 80% at 20% 0%,var(--accent-soft),transparent 60%),linear-gradient(200deg,var(--bg-code),var(--bg-page) 70%)' },
+  { id: 'aurora', name: 'aurora',     css: 'radial-gradient(90% 60% at 15% 15%,#94e2d5,transparent 55%),radial-gradient(80% 70% at 85% 45%,#89b4fa,transparent 55%)' },
+  { id: 'sakura', name: 'sakura',     css: 'radial-gradient(70% 50% at 80% 10%,#f5c2e7,transparent 55%),radial-gradient(90% 60% at 10% 70%,#cba6f7,transparent 55%)' },
+  { id: 'ember',  name: 'ember',      css: 'radial-gradient(80% 55% at 25% 90%,#fab387,transparent 55%),radial-gradient(70% 50% at 90% 20%,#f38ba8,transparent 55%)' },
+  { id: 'abyss',  name: 'deep sea',   css: 'radial-gradient(100% 70% at 50% 100%,#74c7ec,transparent 60%)' },
+  { id: 'grid',   name: 'terminal',   css: 'repeating-linear-gradient(0deg,var(--accent-line) 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,var(--accent-line) 0 1px,transparent 1px 22px)' },
+  { id: 'stars',  name: 'starfield',  css: 'radial-gradient(1.4px 1.4px at 18% 22%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 62% 12%,var(--fg-dim),transparent),radial-gradient(1.6px 1.6px at 38% 62%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 82% 78%,var(--fg-dim),transparent)' },
+];
+
+const SIDEBAR_DEFAULTS = { wall: 'none', opacity: 45, blur: 2, bright: 100, sat: 110, scrim: 55, pos: 'center', open: true };
+const SIDEBAR_RANGES   = { opacity: [0, 100], blur: [0, 24], bright: [30, 180], sat: [0, 200], scrim: [0, 100] };
+const SIDEBAR_POSITIONS = ['top', 'center', 'bottom'];
+// What "reset background" restores — the appearance fields and nothing else. `open`
+// is a deliberate user choice (⌘B / "hide sidebar"), not part of the wallpaper look.
+const SIDEBAR_LOOK_DEFAULTS = Object.fromEntries(
+  Object.entries(SIDEBAR_DEFAULTS).filter(([k]) => k !== 'open')
+);
+// Below this viewport width the panel is display:none (see the media query in
+// style.css) — the two must stay in step or ⌘B writes a state nobody can see.
+const SIDEBAR_BREAKPOINT = 820;
+const TAB_MAX = 9;   // Ctrl+1..9 addresses them, so nine is the natural ceiling
+
 const SYNC_DELAY     = 800;
 const PUSH_DELAY     = 2000;
 
@@ -133,6 +172,13 @@ let shareOverlay, shareCard, shareLinkEl, shareQr, capFill, capText, shareTtlEl,
 let shareTinyUrl = null;   // the URL currently shown in the share panel (tiny, or full-hash fallback)
 let shareReq = 0;          // monotonic token so a stale in-flight upload can't overwrite a newer one
 let fab;
+let sidebarEl, sidebarTree, sidebarCount, appShell, sbNew;
+let tablineEl, tabsEl, paletteBars;
+let barSaveTimer = null;
+let nextNoteFolder = null;  // folder name typed in the /newFolder prompt
+let pendingFolder  = null;  // { nid, folder } — bound to a specific note, never "the next save"
+const lineNumbersOn = true;  // vim gutter — always on; kept as one named seam to disable it
+let openTabs = [];          // [nid] of notes in the tabline; the active one is noteId
 
 // ── State encode / decode ─────────────────────────────────────────────────────
 function encodeState(state) {
@@ -288,6 +334,82 @@ function groupByFolder(snaps) {
   return { loose, folders: [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])) };
 }
 
+// Flatten snapshots into the ordered rows the sidebar tree renders: folders
+// first (each followed by its notes unless folded), then loose notes. Pure —
+// the DOM is built from these rows, never read back from.
+function buildTreeRows(snaps, folded) {
+  const list = Array.isArray(snaps) ? snaps : [];
+  const has = (name) => !!(folded && typeof folded.has === 'function' && folded.has(name));
+  const { loose, folders } = groupByFolder(list);
+  const rows = [];
+  const note = (s, folder) => ({
+    kind: 'note',
+    nid: s.nid,
+    title: s.title || 'untitled',
+    folder,
+    t: s.t || 0,
+  });
+  folders.forEach(([name, items]) => {
+    const isFolded = has(name);
+    rows.push({ kind: 'folder', name, count: items.length, folded: isFolded });
+    if (!isFolded) items.forEach(s => rows.push(note(s, name)));
+  });
+  loose.forEach(s => rows.push(note(s, null)));
+  return rows;
+}
+
+// Sidebar prefs arrive from localStorage and from another device via /api/sync, so
+// treat every field as hostile: clamp numbers, reject unknown ids, fill the gaps.
+function normalizeSidebarCfg(raw) {
+  const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  const cfg = Object.assign({}, SIDEBAR_DEFAULTS);
+  Object.keys(SIDEBAR_RANGES).forEach(k => {
+    const [lo, hi] = SIDEBAR_RANGES[k];
+    const n = (src[k] === null || src[k] === undefined) ? NaN : Number(src[k]);
+    cfg[k] = Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : SIDEBAR_DEFAULTS[k];
+  });
+  cfg.wall = WALLPAPERS.some(w => w.id === src.wall) ? src.wall : SIDEBAR_DEFAULTS.wall;
+  cfg.pos  = SIDEBAR_POSITIONS.indexOf(src.pos) >= 0 ? src.pos : SIDEBAR_DEFAULTS.pos;
+  cfg.open = src.open === undefined ? SIDEBAR_DEFAULTS.open : !!src.open;
+  return cfg;
+}
+
+// A normalized config becomes the custom properties the panel's ::before/::after read.
+// Filters live on those layers, never on #sidebar itself, so the file names stay sharp.
+function sidebarCssVars(cfg) {
+  const wall = WALLPAPERS.find(w => w.id === cfg.wall) || WALLPAPERS[0];
+  return {
+    '--sb-img':     wall.css,
+    '--sb-opacity': String(cfg.opacity / 100),
+    '--sb-blur':    cfg.blur + 'px',
+    '--sb-bright':  String(cfg.bright / 100),
+    '--sb-sat':     String(cfg.sat / 100),
+    '--sb-scrim':   String(cfg.scrim / 100),
+    '--sb-pos':     cfg.pos,
+  };
+}
+
+// Writes a normalized config onto #sidebar as custom properties. The consumer of
+// sidebarEl (cached but otherwise unused until /settings existed).
+function applySidebarCfg(cfg) {
+  if (!sidebarEl) return;
+  const vars = sidebarCssVars(cfg);
+  Object.keys(vars).forEach(k => sidebarEl.style.setProperty(k, vars[k]));
+  appShell.classList.toggle('no-sidebar', !cfg.open);
+}
+
+// Merges a partial change into the saved sidebar config, persists, and re-applies —
+// the write side of the same prefs blob theme/font already round-trip through.
+function saveSidebarCfg(patch) {
+  const prefs = loadPrefs();
+  const cfg = normalizeSidebarCfg(Object.assign(normalizeSidebarCfg(prefs.sidebar), patch));
+  prefs.sidebar = cfg;
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { t: Date.now() }))); } catch (e) {}
+  applySidebarCfg(cfg);
+  pushNow();
+  return cfg;
+}
+
 function assignFolder(nid, folder) {
   try {
     const list = loadSnapshots();
@@ -299,6 +421,8 @@ function assignFolder(nid, folder) {
   } catch (e) {}
   schedulePush();
   renderRecent();
+  renderSidebar();
+  renderTabline();
 }
 
 function deleteSnapshot(nid) {
@@ -307,6 +431,8 @@ function deleteSnapshot(nid) {
   } catch (e) {}
   schedulePush();
   renderRecent();
+  renderSidebar();
+  renderTabline();
 }
 
 // Newest entry per note id wins; result sorted newest-first, capped.
@@ -331,7 +457,8 @@ function loadPrefs() {
 
 function savePrefs() {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: currentTheme, font: currentFont, t: Date.now() }));
+    const prefs = loadPrefs();
+    localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { theme: currentTheme, font: currentFont, t: Date.now() })));
   } catch (e) { /* fine */ }
   pushNow();   // prefs changes are rare and easily lost to the debounce — push at once
 }
@@ -362,8 +489,14 @@ async function syncPull() {
       if (THEMES.includes(data.prefs.theme)) applyTheme(data.prefs.theme);
       if (FONTS.includes(data.prefs.font))   applyFont(data.prefs.font);
     }
+    // Sidebar background/opacity/blur isn't tied to the note on screen, so it
+    // always applies live — pulled through normalizeSidebarCfg since a remote
+    // config must never reach a CSS property unvalidated.
+    if (data.prefs.sidebar) applySidebarCfg(normalizeSidebarCfg(data.prefs.sidebar));
   }
   if (emptyVisible) renderRecent();
+  renderSidebar();
+  renderTabline();
 }
 
 function pushNow() {
@@ -440,6 +573,11 @@ function buildBlockEl(block) {
 
   div.appendChild(buildGutter());
   div.appendChild(buildTouchTools(block.type === 'code'));
+
+  const lines = document.createElement('div');
+  lines.className = 'blk-lines';
+  lines.setAttribute('aria-hidden', 'true');   // decoration; never read to screen readers
+  div.appendChild(lines);
 
   if (block.type === 'code') {
     const head = document.createElement('div');
@@ -523,6 +661,7 @@ function renderAllBlocks() {
       syncMarkdown(b.id);
     }
   });
+  renderLineNumbers();
 }
 
 function syncHighlight(blockId) {
@@ -543,6 +682,7 @@ function syncHighlight(blockId) {
 }
 
 function updateLineCount(blockId) {
+  renderLineNumbers();
   const el = getBlockEl(blockId);
   if (!el) return;
   const counter = el.querySelector('.line-count');
@@ -697,6 +837,7 @@ function buildCommandList() {
     { id: 'focus',  label: '/focus',  ico: '◎',  desc: focusMode ? 'exit focus mode' : 'distraction-free writing', kbd: '⌘.' },
     { id: 'theme',  label: '/theme',  ico: '◐',  desc: 'change theme' },
     { id: 'font',   label: '/font',   ico: 'Aa', desc: 'change font' },
+    { id: 'settings', label: '/settings', ico: '⚙', desc: 'sidebar background & panel' },
     { id: 'export', label: '/export', ico: '⇩',  desc: 'md · pdf · docx · html' },
     { id: 'sync',   label: '/sync',   ico: '⟲',  desc: syncKey ? 'turn off cross-device sync' : 'sync notes across devices', hint: syncKey ? 'on' : null },
     { id: 'delete', label: '/delete', ico: '✕',  desc: 'delete current block' },
@@ -775,6 +916,7 @@ function buildHelpList() {
     { label: 'command palette',   kbd: '⌘K' },
     { label: 'copy link + share', kbd: '⌘⇧C' },
     { label: 'focus mode',        kbd: '⌘.' },
+    { label: 'toggle sidebar',    kbd: '⌘B' },
     { label: 'insert / format menu', kbd: '/' },
     { label: 'new line',          kbd: 'Enter' },
     { label: 'exit block',        kbd: '⇧Enter' },
@@ -816,8 +958,21 @@ function openPalette(mode, opts = {}) {
   } else {
     revertPreview();
   }
+  // opts.keep: this is a refresh of the palette we're already in, not a fresh open —
+  // keep the selected row and the typed filter. The /settings ± commands re-open the
+  // palette to redraw the values they just changed, and stepping opacity/blur is only
+  // useful repeated: without this, Enter #2 would fire row 0 ("hide sidebar") instead.
+  const keptIndex = opts.keep ? paletteIndex : 0;
+  const keptQuery = opts.keep ? paletteSearch.value : '';
+  // The pending folder is only ever legal across newFolder → filename → newNote.
+  // Any other mode transition means that flow was abandoned (escape out of the
+  // filename prompt lands on 'command' without ever calling closePalette), so drop
+  // it here rather than let it misfile whatever note is created next. This is the
+  // third bug from this one global; sweeping at every hop closes the class.
+  if (mode !== 'filename' && mode !== 'newFolder') nextNoteFolder = null;
+
   paletteMode  = mode;
-  paletteIndex = 0;
+  paletteIndex = keptIndex;
   paletteOpen  = true;
   if (opts.anchor !== undefined) {
     paletteAnchor = opts.anchor;
@@ -882,17 +1037,47 @@ function openPalette(mode, opts = {}) {
       { id: '__none', label: 'no folder', ico: '—', desc: 'top level' },
       ...folders.map(f => ({ id: f, label: f + '/', ico: '▸' })),
     ];
+  } else if (mode === 'newItem') {
+    paletteTitle.textContent = 'CREATE';
+    paletteItems = [
+      { id: 'ni-note',   label: 'new note',   ico: '✚', desc: 'a blank note in the tree' },
+      { id: 'ni-folder', label: 'new folder', ico: '▸', desc: 'name it, and start a note inside' },
+    ];
+  } else if (mode === 'newFolder') {
+    paletteTitle.textContent = 'NEW FOLDER';
+    paletteItems = [];
+  } else if (mode === 'settings') {
+    const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
+    paletteTitle.textContent = 'SIDEBAR';
+    paletteItems = [
+      { id: 'sb-toggle', label: cfg.open ? 'hide sidebar' : 'show sidebar', ico: '▤', desc: 'toggle the notes panel' },
+      { id: 'sb-reset', label: 'reset background',   ico: '⟲', desc: 'back to defaults' },
+    ];
   }
 
-  paletteSearch.value       = '';
-  paletteSearch.placeholder = mode === 'filename' ? 'enter filename...'
+  // A kept filter can stop matching when the row it matched relabels itself ("hide
+  // sidebar" ⇄ "show sidebar"); an empty palette is worse than a dropped filter.
+  const keptRows = filterPaletteItems(paletteItems, keptQuery);
+  const keepable = keptRows.length > 0;
+  paletteSearch.value       = keepable ? keptQuery : '';
+  paletteSearch.placeholder = mode === 'newFolder' ? 'folder name...'
+    : mode === 'filename' ? 'enter filename...'
     : mode === 'syncPhrase' ? 'enter a passphrase (6+ chars)...'
     : mode === 'folder' ? 'pick, or type a new folder name...'
     : 'search...';
-  renderPaletteList(paletteItems);
+  // renderPaletteList clamps paletteIndex into the (possibly filtered) list.
+  renderPaletteList(keepable ? keptRows : paletteItems);
   paletteOverlay.classList.remove('hidden');
-  // In theme/font mode the document is the preview — don't dim/blur it
-  paletteOverlay.classList.toggle('preview', mode === 'theme' || mode === 'font');
+  // In theme/font/settings mode the document (or sidebar wallpaper) is the
+  // preview — don't dim/blur it
+  paletteOverlay.classList.toggle('preview', mode === 'theme' || mode === 'font' || mode === 'settings');
+
+  // /settings and /help become centred floating windows (lazy.nvim's shape); every
+  // other mode keeps the bottom-left palette. Same element, same keys — only the frame.
+  const isFloat = mode === 'settings' || mode === 'help';
+  paletteEl.classList.toggle('float', isFloat);
+  paletteEl.dataset.title = isFloat ? mode : '';
+  renderSidebarBars(mode === 'settings');
   positionPalette();
   paletteSearch.focus();
   updateStatus();
@@ -982,17 +1167,22 @@ function renderPaletteList(items) {
   positionPalette();
 }
 
+// The subset of rows matching a typed query. Pure, and split out of filterPalette so
+// openPalette can re-apply a live filter (opts.keep) without also resetting the
+// selected row — typing is what should jump back to the top, a refresh isn't.
+function filterPaletteItems(items, query) {
+  const q = (query || '').toLowerCase().replace(/^\//, '');
+  if (!q) return items;
+  return items.filter(item =>
+    (item.label || '').toLowerCase().includes(q) ||
+    (item.desc || '').toLowerCase().includes(q) ||
+    (item.hint || '').toLowerCase().includes(q)
+  );
+}
+
 function filterPalette(query) {
-  const q = query.toLowerCase().replace(/^\//, '');
-  const filtered = q
-    ? paletteItems.filter(item =>
-        (item.label || '').toLowerCase().includes(q) ||
-        (item.desc || '').toLowerCase().includes(q) ||
-        (item.hint || '').toLowerCase().includes(q)
-      )
-    : paletteItems;
   paletteIndex = 0;
-  renderPaletteList(filtered);
+  renderPaletteList(filterPaletteItems(paletteItems, query));
   previewHighlighted();
 }
 
@@ -1011,6 +1201,11 @@ function closePalette() {
   paletteEl.classList.remove('anchored');
   folderTarget = null;
   formatSel = null;
+  // Same lifecycle as folderTarget: if the user escapes the filename prompt that
+  // /newFolder routes through, the pending name must die with it — otherwise the
+  // next new-note flow silently files an unrelated note into that folder. The
+  // /newFolder branch sets this *after* calling closePalette, so it survives there.
+  nextNoteFolder = null;
   if (activeBlockId !== null && (!emptyVisible || wasAnchored)) {
     const content = getContentEl(activeBlockId);
     // A block that already has markdown hides its editable layer when blurred; reveal
@@ -1035,7 +1230,8 @@ function closePalette() {
 // 'help' backs out to the command menu (matching themes/fonts) instead of dying.
 function paletteEscTarget(mode, hasAnchor) {
   if (mode === 'command' || mode === 'insert' || mode === 'format') return 'close';
-  if (mode === 'help') return 'command';
+  if (mode === 'newFolder') return 'newItem';
+  if (mode === 'help' || mode === 'settings' || mode === 'newItem') return 'command';
   if (mode === 'lang' && hasAnchor) return 'insert';
   return 'command';
 }
@@ -1055,6 +1251,7 @@ function dispatchPaletteEsc() {
   const target = paletteEscTarget(paletteMode, paletteAnchor !== null);
   if (target === 'close') closePalette();
   else if (target === 'insert') openPalette('insert', { anchor: paletteAnchor });
+  else if (target === 'newItem') openPalette('newItem');
   else openPalette('command');
 }
 
@@ -1081,12 +1278,32 @@ function confirmPalette() {
   // /help is read-only — Enter just dismisses it
   if (paletteMode === 'help') { closePalette(); return; }
 
+  // Folders are a field on a snapshot, not their own record, so an empty folder
+  // cannot exist — creating one means starting the first note inside it.
+  if (paletteMode === 'newFolder') {
+    const name = paletteSearch.value.trim().replace(/\/+$/, '');
+    closePalette();
+    if (!name) return;
+    // Bind via nextNoteFolder, not pendingFolder: startNewNote() flushes the
+    // *outgoing* note first, and a bare "apply to the next save" would file that
+    // note into the folder instead of the one we're about to create.
+    nextNoteFolder = name;
+    startNewNote();
+    return;
+  }
+
   // Filename mode — read directly from search input, no list needed
   if (paletteMode === 'filename') {
     const filename = paletteSearch.value.trim() || 'notes';
+    // closePalette() clears nextNoteFolder as its abandonment sweep, and this is the
+    // one path that legitimately continues into newNote() — so carry the value across
+    // and re-arm it. Without this, completing /newFolder with saveBeforeNew on (the
+    // default) would file the new note nowhere.
+    const carryFolder = nextNoteFolder;
     closePalette();
     if (pendingExport === 'newNote') {
       exportHtmlAs(filename);
+      nextNoteFolder = carryFolder;
       newNote();
     } else if (pendingExport === 'md')   exportMd(filename);
     else if (pendingExport === 'pdf')    exportPdf(filename);
@@ -1164,16 +1381,7 @@ function confirmPalette() {
       maybeShowEmptyState();
       return;
     }
-    if (selected.id === 'newNote') {
-      if (saveBeforeNew) {
-        pendingExport = 'newNote';
-        openPalette('filename');
-      } else {
-        closePalette();
-        newNote();
-      }
-      return;
-    }
+    if (selected.id === 'newNote') { startNewNote(); return; }
     if (selected.id === 'saveBeforeNew') {
       saveBeforeNew = !saveBeforeNew;
       closePalette();
@@ -1185,6 +1393,13 @@ function confirmPalette() {
       return;
     }
     openPalette(selected.id);
+    return;
+  }
+
+  if (paletteMode === 'newItem') {
+    if (selected.id === 'ni-note')   { closePalette(); startNewNote(); return; }
+    if (selected.id === 'ni-folder') { openPalette('newFolder'); return; }
+    closePalette();
     return;
   }
 
@@ -1263,6 +1478,17 @@ function confirmPalette() {
   } else if (paletteMode === 'export') {
     pendingExport = selected.id;
     openPalette('filename');
+  } else if (paletteMode === 'settings') {
+    // Every branch re-opens 'settings' to redraw the values it just changed; { keep: true }
+    // holds the selection (and any typed filter) so the ± rows can be pressed repeatedly.
+    const refresh = () => openPalette('settings', { keep: true });
+    // Through toggleSidebar, not saveSidebarCfg, so `open` has exactly one gate: the
+    // palette is reachable on a phone via #fab, and flipping `open` there would persist
+    // (and sync to the desktop) a change nobody can see the panel make.
+    if (selected.id === 'sb-toggle') { toggleSidebar(); refresh(); return; }
+    // Appearance only — SIDEBAR_LOOK_DEFAULTS omits `open`, so resetting the background
+    // must not pop a deliberately hidden panel back open.
+    if (selected.id === 'sb-reset')   { saveSidebarCfg(SIDEBAR_LOOK_DEFAULTS); refresh(); return; }
   }
   updateStatus();
 }
@@ -1322,14 +1548,26 @@ function syncNow() {
     history.replaceState(null, '', window.location.pathname + '#' + hash);
     lastUrlLen = (window.location.origin + window.location.pathname + '#' + hash).length;
     const langs = [...new Set(state.blocks.filter(b => b.lang).map(b => b.lang))];
+    // saveSnapshot replaces the whole record, so any field it isn't given is lost.
+    // Carry the note's existing folder across, or file a brand-new note into the
+    // folder the user just created via the sidebar's `+`.
+    const prev = loadSnapshots().find(s => s.nid === noteId);
+    let folder = prev ? prev.folder : null;
+    if (pendingFolder && pendingFolder.nid === noteId) {
+      folder = pendingFolder.folder;
+      pendingFolder = null;
+    }
     saveSnapshot({
       nid: noteId,
       hash,
+      folder,
       title: noteTitle(state.blocks),
       blockCount: state.blocks.length,
       langs,
       t: Date.now(),
     });
+    renderSidebar();
+    renderTabline();
   } else {
     history.replaceState(null, '', window.location.pathname);
     lastUrlLen = 0;
@@ -1600,6 +1838,7 @@ function renderRecent() {
       if (collapsed) collapsedFolders.delete(name);
       else collapsedFolders.add(name);
       renderRecent();
+      renderSidebar();
     });
     recentList.appendChild(head);
     if (!collapsed) {
@@ -1614,6 +1853,273 @@ function renderRecent() {
   // Rows were rebuilt: drop a now-out-of-range selection, else re-paint it.
   if (homeNavIndex >= homeNavRows().length) homeNavIndex = -1;
   applyHomeNavHighlight();
+}
+
+// The sidebar is a second view onto the same bbn.recent snapshots the home screen
+// renders, sharing collapsedFolders so both always agree about what is folded.
+// ── Line numbers ─────────────────────────────────────────────────────────────
+// vim's gutter: continuous numbering across every block, then tildes past the end
+// of the buffer. Numbers live inside each block so they inherit its line-height and
+// stay aligned; the count comes from the model (block.content), never from reading
+// text back out of the DOM — a hidden element's innerText silently drops newlines.
+function renderLineNumbers() {
+  if (!docContainer || !lineNumbersOn) return;
+  let n = 0;
+  blocks.forEach(block => {
+    const el = getBlockEl(block.id);
+    if (!el) return;
+    const box = el.querySelector('.blk-lines');
+    if (!box) return;
+    const count = Math.max(1, getBlockText(block).split('\n').length);
+    let html = '';
+    for (let i = 0; i < count; i++) html += `<span>${++n}</span>`;
+    box.innerHTML = html;
+  });
+}
+
+// ── Sidebar drag bars (inside the /settings float) ───────────────────────────
+// Sliders, not ± commands: dragging is how you find the right blur. The palette
+// stays keyboard-first — these are extra, and every bar is reachable by Tab.
+const SIDEBAR_BARS = [
+  { key: 'opacity', label: 'opacity',    unit: '%'  },
+  { key: 'blur',    label: 'blur',       unit: 'px' },
+  { key: 'bright',  label: 'brightness', unit: '%'  },
+  { key: 'sat',     label: 'saturation', unit: '%'  },
+  { key: 'scrim',   label: 'text scrim', unit: '%'  },
+];
+
+function renderSidebarBars(show) {
+  if (!paletteBars) return;
+  paletteBars.classList.toggle('hidden', !show);
+  if (!show) { paletteBars.innerHTML = ''; return; }
+  const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
+  paletteBars.innerHTML =
+    // Swatches, not list rows: you pick a background by looking at it. `none` gets a
+    // checkerboard so "off" is visibly different from "a very dark wallpaper".
+    `<div class="pal-sect">background</div>` +
+    `<div class="pal-swatches">` +
+      WALLPAPERS.map(w => {
+        const img = w.id === 'none'
+          ? 'repeating-linear-gradient(45deg,var(--border) 0 6px,var(--bg-code) 6px 12px)'
+          : w.css;
+        return `<button class="pal-swatch${cfg.wall === w.id ? ' on' : ''}"
+                  data-wall="${escapeHtml(w.id)}" title="${escapeHtml(w.name)}"
+                  style="background-image:${img}">
+                  <span>${escapeHtml(w.name)}</span>
+                </button>`;
+      }).join('') +
+    `</div>` +
+    `<div class="pal-sect">image</div>` +
+    SIDEBAR_BARS.map(b => {
+      const [lo, hi] = SIDEBAR_RANGES[b.key];
+      return `<div class="pal-bar">
+        <label for="pb-${b.key}">${b.label}</label>
+        <input id="pb-${b.key}" type="range" min="${lo}" max="${hi}"
+               value="${cfg[b.key]}" data-bar="${b.key}" />
+        <output id="po-${b.key}">${cfg[b.key]}${b.unit}</output>
+      </div>`;
+    }).join('') +
+    `<div class="pal-bar">
+       <label for="pb-pos">position</label>
+       <input id="pb-pos" type="range" min="0" max="2" step="1"
+              value="${SIDEBAR_POSITIONS.indexOf(cfg.pos)}" data-bar="pos" />
+       <output id="po-pos">${cfg.pos}</output>
+     </div>` +
+    `<div class="pal-bars-hint">drag to adjust · changes preview live</div>`;
+}
+
+// Live-drag writes straight to the DOM and defers the (synced) save, so dragging a
+// slider doesn't fire a PUT per pixel. `change` fires once on release.
+function onSidebarBarInput(e) {
+  const input = e.target.closest('[data-bar]');
+  if (!input) return;
+  const key = input.dataset.bar;
+  const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
+  if (key === 'pos') {
+    cfg.pos = SIDEBAR_POSITIONS[Number(input.value)] || 'center';
+    document.getElementById('po-pos').textContent = cfg.pos;
+  } else {
+    cfg[key] = Number(input.value);
+    const unit = (SIDEBAR_BARS.find(b => b.key === key) || {}).unit || '';
+    document.getElementById('po-' + key).textContent = input.value + unit;
+  }
+  applySidebarCfg(normalizeSidebarCfg(cfg));   // preview only
+  clearTimeout(barSaveTimer);
+  barSaveTimer = setTimeout(() => saveSidebarCfg(cfg), 250);
+}
+
+// ── Sidebar row presentation ─────────────────────────────────────────────────
+// A note whose blocks are all one language reads as a file of that language; a
+// mixed or prose note is markdown. Purely cosmetic — nothing keys off this.
+const SB_BADGE = {
+  javascript: ['JS',  '--sb-js'],   python: ['PY', '--sb-py'],   html: ['<>', '--sb-html'],
+  css:        ['CSS', '--sb-css'],  json:   ['{}', '--sb-json'], bash: ['SH', '--sb-sh'],
+  sql:        ['SQL', '--sb-sql'],  java:   ['JV', '--sb-java'], cpp:  ['C+', '--sb-cpp'],
+};
+const SB_EXT = {
+  javascript: 'js', python: 'py', html: 'html', css: 'css', json: 'json',
+  bash: 'sh', sql: 'sql', java: 'java', cpp: 'cpp',
+};
+
+function soleLang(snap) {
+  const langs = (snap && snap.langs) || [];
+  return langs.length === 1 ? langs[0] : null;
+}
+
+// Give each row a filename, the way a file tree shows one — "notes" becomes
+// "notes.md". Titles that already carry the extension aren't doubled up.
+function fileLabel(title, snap) {
+  const name = (title || 'untitled').trim() || 'untitled';
+  const ext  = SB_EXT[soleLang(snap)] || 'md';
+  return name.toLowerCase().endsWith('.' + ext) ? name : name + '.' + ext;
+}
+
+function sidebarIconHtml(snap) {
+  const [text, varName] = SB_BADGE[soleLang(snap)] || ['M↓', '--sb-md'];
+  return `<span class="sb-badge" style="color:var(${varName})">${text}</span>`;
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+// A tab is a *reference* to a snapshot (its nid), never a second copy of the note.
+// blocks[] and location.hash still hold exactly one note — the active tab's — so
+// sharing, capacity and the URL-is-the-note promise are unchanged. Switching tabs
+// is "save the current note to its snapshot, then load the other one's hash".
+function loadTabs() {
+  const raw = loadPrefs().tabs;
+  return Array.isArray(raw) ? raw.filter(x => typeof x === 'string') : [];
+}
+
+function saveTabs() {
+  try {
+    const prefs = loadPrefs();
+    prefs.tabs = openTabs.slice(0, TAB_MAX);
+    localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { t: Date.now() })));
+  } catch (e) { /* storage unavailable — tabs stay session-only */ }
+}
+
+// Drop tabs whose snapshot no longer exists (deleted here or on another device),
+// so a pull can't leave the tabline pointing at notes that aren't there.
+function pruneTabs() {
+  const live = new Set(loadSnapshots().map(s => s.nid));
+  const kept = openTabs.filter(nid => live.has(nid) || nid === noteId);
+  if (kept.length !== openTabs.length) { openTabs = kept; saveTabs(); }
+}
+
+function renderTabline() {
+  if (!tabsEl) return;
+  pruneTabs();
+  const snaps = loadSnapshots();
+  tabsEl.innerHTML = '';
+  openTabs.forEach((nid, i) => {
+    const snap = snaps.find(s => s.nid === nid);
+    const title = nid === noteId ? noteTitle(blocks) : (snap ? snap.title : 'untitled');
+    const b = document.createElement('button');
+    b.className = 'tab' + (nid === noteId ? ' active' : '');
+    b.dataset.tab = nid;
+    b.title = title;
+    b.innerHTML =
+      `<span class="t-idx">${i + 1}</span>` +
+      `<span class="t-name">${escapeHtml(title || 'untitled')}</span>` +
+      `<span class="t-x" data-close="${escapeHtml(nid)}" aria-label="close">×</span>`;
+    tabsEl.appendChild(b);
+  });
+  const active = tabsEl.querySelector('.tab.active');
+  if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+// Make sure the note on screen has a tab. Called after any load so a note opened
+// from the sidebar, a shared link, or a reload appears in the tabline.
+function ensureActiveTab() {
+  if (!noteId) return;
+  if (!openTabs.includes(noteId)) {
+    openTabs.push(noteId);
+    if (openTabs.length > TAB_MAX) openTabs = openTabs.slice(-TAB_MAX);
+    saveTabs();
+  }
+  renderTabline();
+}
+
+function switchToTab(nid) {
+  if (nid === noteId) return;
+  const snap = loadSnapshots().find(s => s.nid === nid);
+  if (!snap || !isOpenableSnapshot(snap)) {
+    flashCopied("couldn't open this note — its saved data is missing");
+    openTabs = openTabs.filter(x => x !== nid);
+    saveTabs(); renderTabline();
+    return;
+  }
+  syncNow();                       // the note we're leaving must land in recents first
+  dissolveEmptyState();
+  window.location.hash = snap.hash;   // hashchange listener re-renders from the URL
+}
+
+function closeTab(nid) {
+  const i = openTabs.indexOf(nid);
+  if (i < 0) return;
+  const wasActive = nid === noteId;
+  if (wasActive) syncNow();        // don't lose the note we're closing
+  openTabs = openTabs.filter(x => x !== nid);
+  saveTabs();
+  if (!wasActive) return renderTabline();
+  // Walk outwards from the closed position to the first tab that can actually open;
+  // switchToTab drops dead ones, which would otherwise leave no active tab at all.
+  const snaps = loadSnapshots();
+  const order = [...openTabs.slice(0, i).reverse(), ...openTabs.slice(i)];
+  const next  = order.find(id => {
+    const s = snaps.find(x => x.nid === id);
+    return s && isOpenableSnapshot(s);
+  });
+  if (next) return switchToTab(next);
+  startFreshNote();                // nothing openable left — fall back to a blank note
+}
+
+// newNote() without the save prompt: used when closing the final tab, where the
+// note has just been persisted by syncNow() and a prompt would be noise.
+function startFreshNote() {
+  newNote();   // registers its own tab
+}
+
+function renderSidebar() {
+  if (!sidebarTree) return;
+  const snaps = loadSnapshots();
+  const rows  = buildTreeRows(snaps, collapsedFolders);
+  sidebarTree.innerHTML = '';
+  rows.forEach(r => {
+    const b = document.createElement('button');
+    b.className = 'sb-row' + (r.kind === 'folder' ? ' dir' : '');
+    if (r.kind === 'folder') {
+      b.dataset.folder = r.name;
+      b.innerHTML =
+        `<span class="sb-chev">${r.folded ? '▸' : '▾'}</span>` +
+        `<span class="sb-name">${escapeHtml(r.name)}/</span>` +
+        `<span class="sb-count">${r.count}</span>`;
+    } else {
+      const snap = snaps.find(s => s.nid === r.nid);
+      b.dataset.nid = r.nid;
+      b.style.paddingLeft = (r.folder ? 31 : 10) + 'px';
+      b.innerHTML =
+        `<span class="sb-chev"></span>` +
+        sidebarIconHtml(snap) +
+        `<span class="sb-name">${escapeHtml(fileLabel(r.title, snap))}</span>` +
+        (r.nid === noteId ? '<span class="sb-open">●</span>' : '');
+    }
+    sidebarTree.appendChild(b);
+  });
+  sidebarCount.textContent = snaps.length + (snaps.length === 1 ? ' note' : ' notes');
+}
+
+function toggleSidebar(force) {
+  // On a narrow viewport the panel is hidden by media query, so flipping it would
+  // persist — and sync to the user's other devices — a state they can't see change.
+  if (window.innerWidth <= SIDEBAR_BREAKPOINT) return;
+  const open = force === undefined ? appShell.classList.contains('no-sidebar') : !!force;
+  appShell.classList.toggle('no-sidebar', !open);
+  const prefs = loadPrefs();
+  prefs.sidebar = Object.assign(normalizeSidebarCfg(prefs.sidebar), { open });
+  // Read side lands with /settings (applySidebarCfg on boot) — persisted here so the
+  // preference is already correct when that arrives.
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { t: Date.now() }))); } catch (e) {}
+  schedulePush();
 }
 
 // Rewrite an image markdown line after a drag (place/tilt) or resize
@@ -1746,8 +2252,29 @@ function exportHtmlAs(filename) {
   downloadBlob(new Blob([html], { type: 'text/html' }), filename + '.html');
 }
 
+// The single entry point for "start a fresh note", shared by the /newNote command and
+// the sidebar's + button. newNote() itself is destructive — it swaps noteId, throws
+// away blocks[] and clears the hash — so both guards belong here, not at the call site:
+//   1. syncNow() flushes the current note into the URL and bbn.recent now, instead of
+//      leaving it to the 800ms scheduleSync debounce a click can easily beat.
+//   2. /save_before_new routes through the filename prompt the user opted into.
+// Callable with the palette open (a command) or closed (the + button).
+function startNewNote() {
+  syncNow();
+  if (saveBeforeNew) {
+    pendingExport = 'newNote';
+    openPalette('filename');
+    return;
+  }
+  if (paletteOpen) closePalette();
+  newNote();
+}
+
 function newNote() {
   noteId = Math.random().toString(36).slice(2, 10);
+  // Claim the pending folder for *this* note id, so a later save can't misapply it.
+  pendingFolder = nextNoteFolder !== null ? { nid: noteId, folder: nextNoteFolder } : null;
+  nextNoteFolder = null;
   blocks = [createBlock('text')];
   renderAllBlocks();
   history.replaceState(null, '', window.location.pathname);
@@ -1755,6 +2282,9 @@ function newNote() {
   updateCapacityUI();
   focusBlock(blocks[0].id, false);
   updateStatus();
+  // newNote() uses replaceState, which fires no hashchange — so the tabline would
+  // never learn about a note created this way without an explicit call.
+  ensureActiveTab();
 }
 
 function exportDocx(filename = 'notes') {
@@ -1902,6 +2432,20 @@ function attachEvents() {
       return;
     }
 
+    // Ctrl/Cmd+B — toggle the sidebar
+    // Ctrl+1..9 selects a tab by its printed number. Ctrl (not Cmd) on purpose:
+    // Cmd+1..9 is the browser's own tab switcher and we must not shadow it.
+    if (e.ctrlKey && !e.metaKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+      const nid = openTabs[Number(e.key) - 1];
+      if (nid) { e.preventDefault(); switchToTab(nid); return; }
+    }
+
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+      e.preventDefault();
+      toggleSidebar();
+      return;
+    }
+
     // / with no block focused — focus a block and open the same caret palette
     // as in-block, so / is always the inline insert/format menu (never bottom-left)
     if (e.key === '/' && !e.target.closest('.block-content') && e.target !== paletteSearch) {
@@ -2010,10 +2554,56 @@ function attachEvents() {
 
   exampleLink.addEventListener('click', () => dissolveEmptyState());
 
+  // ── Sidebar ──
+  sidebarTree.addEventListener('click', (e) => {
+    const folder = e.target.closest('[data-folder]');
+    if (folder) {
+      const name = folder.dataset.folder;
+      if (collapsedFolders.has(name)) collapsedFolders.delete(name);
+      else collapsedFolders.add(name);
+      renderSidebar();
+      if (emptyVisible) renderRecent();
+      return;
+    }
+    const row = e.target.closest('[data-nid]');
+    if (!row) return;
+    // Route through switchToTab: it flushes the pending autosave before navigating.
+    // Setting location.hash directly loses that race — the debounced syncNow() then
+    // fires with the *new* noteId but the *old* blocks and overwrites the note you
+    // just opened with the one you just left.
+    switchToTab(row.dataset.nid);
+  });
+
+  // Same guarded path as /newNote — never the raw, unrecoverable newNote().
+  sbNew.addEventListener('click', () => openPalette('newItem'));
+
+  paletteBars.addEventListener('input', onSidebarBarInput);
+  paletteBars.addEventListener('click', (e) => {
+    const sw = e.target.closest('[data-wall]');
+    if (!sw) return;
+    saveSidebarCfg({ wall: sw.dataset.wall });
+    renderSidebarBars(true);          // repaint so the ✓ moves to the new swatch
+  });
+  // Keys inside a slider are the slider's own; don't let the palette's ↑/↓/Enter
+  // navigation steal them while the user is adjusting a bar.
+  paletteBars.addEventListener('keydown', (e) => { if (e.target.closest('[data-bar]')) e.stopPropagation(); });
+
+  tablineEl.addEventListener('click', (e) => {
+    if (e.target.id === 'tab-new')  return openPalette('newItem');
+    if (e.target.id === 'tab-help') return openPalette('help');
+    const x = e.target.closest('[data-close]');
+    if (x) { e.stopPropagation(); return closeTab(x.dataset.close); }
+    const tab = e.target.closest('[data-tab]');
+    if (tab) switchToTab(tab.dataset.tab);
+  });
+
   // ── URL navigation (example link, recent notes, pasted links) ──
   window.addEventListener('hashchange', () => {
     loadState();
     maybeShowEmptyState();
+    // Every route into a note lands here — sidebar click, tab switch, shared link,
+    // back button — so this is the one place that has to keep the tabline honest.
+    ensureActiveTab();
   });
 
   // ── Block-level events (delegated from docContainer) ──
@@ -2031,6 +2621,13 @@ function attachEvents() {
     const content = e.target.closest('.block-content');
     if (!content) return;
     const id = getBlockIdFromEl(content);
+    // Switching notes rebuilds the DOM and restarts block ids at 0, so a focusout
+    // arriving from the note we just left would look up id 0 in the note we just
+    // opened and overwrite it with innerText read off a detached node — i.e. ''.
+    // Only trust the element that is currently mounted for this id.
+    if (!content.isConnected) return;
+    const liveEl = getBlockEl(id);
+    if (!liveEl || liveEl.querySelector('.block-content') !== content) return;
     const block = getBlockData(id);
     if (block) block.content = content.innerText || '';   // capture while still visible
     content.closest('.block')?.classList.remove('editing');
@@ -2409,6 +3006,8 @@ function attachEvents() {
     if (block?.type === 'code') {
       syncHighlight(blockId);
       updateLineCount(blockId);
+    } else {
+      renderLineNumbers();   // text blocks have no line-count badge to piggyback on
     }
     dissolveEmptyState();
     if (focusMode) centerActiveBlock();
@@ -2477,6 +3076,16 @@ document.addEventListener('DOMContentLoaded', () => {
   paletteTitle   = document.getElementById('palette-title');
   paletteList    = document.getElementById('palette-list');
   emptyState     = document.getElementById('empty-state');
+  appShell       = document.getElementById('app-shell');
+  // Consumed by applySidebarCfg() to set the --sb-* custom properties
+  // (wallpaper/opacity/blur/etc.) that #sidebar::before/::after read.
+  sidebarEl      = document.getElementById('sidebar');
+  sidebarTree    = document.getElementById('sidebar-tree');
+  sidebarCount   = document.getElementById('sb-count');
+  sbNew          = document.getElementById('sb-new');
+  tablineEl      = document.getElementById('tabline');
+  tabsEl         = document.getElementById('tabs');
+  paletteBars    = document.getElementById('palette-bars');
   recentSection  = document.getElementById('recent-section');
   recentList     = document.getElementById('recent-list');
   exampleLink    = document.getElementById('example-link');
@@ -2493,7 +3102,7 @@ document.addEventListener('DOMContentLoaded', () => {
   shareTtlEl.innerHTML = TINY_EXPIRY
     .map(o => `<option value="${o.ttl}">${o.label}</option>`).join('');
 
-  statusHint.textContent = '/ insert · ⌘K commands · ⌘⇧C share · ⌘. focus';
+  statusHint.textContent = '/ insert · ⌘K commands · ⌘⇧C share · ⌘. focus · ⌘B panel';
   exampleLink.href = '#' + encodeState(EXAMPLE_STATE);
 
   try {
@@ -2513,6 +3122,10 @@ document.addEventListener('DOMContentLoaded', () => {
     maybeShowEmptyState();
   }
   updateStatus();
+  renderSidebar();
+  openTabs = loadTabs();
+  ensureActiveTab();
+  applySidebarCfg(normalizeSidebarCfg(loadPrefs().sidebar));
 
   if (syncKey) syncPull().catch(() => {});
 });
@@ -2556,6 +3169,8 @@ async function resolveTiny(id) {
     history.replaceState(null, '', '/#' + hash);
     loadState();                   // reads location.hash and renders
     maybeShowEmptyState();
+    ensureActiveTab();             // a shared note joins the tabline like any other
+
   } catch (e) {
     showTinyMessage('shared links need the server, which isn’t available right now.');
   }
@@ -2576,10 +3191,12 @@ if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl, insertDividerBlocks,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
-    capacityLevel, timeAgo, mergeRecents, groupByFolder, stripFormatting,
+    capacityLevel, timeAgo, mergeRecents, groupByFolder, buildTreeRows, stripFormatting,
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
-    langIcon, langBadgeHtml, paletteEscTarget, restorableCaret, caretScrollDelta,
+    langIcon, langBadgeHtml, soleLang, fileLabel, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
+    normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS,
+    filterPaletteItems,
   };
 }

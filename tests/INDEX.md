@@ -52,6 +52,11 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `buildHelpList` | `help.test.js` | Read-only `/help` reference: intro + COMMANDS (from `buildCommandList`) + SHORTCUTS + FORMATTING. |
 | `makeRecentRow` | `recents.test.js` | Build a start-screen recent-note row DOM element; asserts the move-to-folder button's icon + accessible label. |
 | `isOpenableSnapshot` | `recents.test.js` | Whether a recent snapshot can actually reopen (non-empty hash that decodes to blocks); guards save + click so a dead note never opens blank (issue #19). |
+| `buildTreeRows` | `sidebar-tree.test.js` | Flattens `bbn.recent` snapshots into the sidebar's ordered rows (folders first, each followed by its notes unless folded, then loose notes). Wraps `groupByFolder`; tolerates a missing folded Set and non-array input. |
+| `normalizeSidebarCfg` | `sidebar-bg.test.js` | Clamps every sidebar background value and rejects unknown wallpaper ids / positions. The trust boundary for `bbn.prefs.sidebar`, which arrives from localStorage **and** from other devices via `/api/sync`. |
+| `sidebarCssVars` | `sidebar-bg.test.js` | A normalized config → the `--sb-*` custom properties the panel's `::before`/`::after` layers read. Pure string building, no DOM. |
+| `filterPaletteItems` | `palette-filter.test.js` | The palette's search predicate (label/desc/hint, case-insensitive, leading `/` ignored). Split out of `filterPalette` so `openPalette(mode, { keep: true })` can re-apply a live filter without resetting the selected row — the seam behind repeatable `/settings` ± commands. |
+| `SIDEBAR_LOOK_DEFAULTS` | `sidebar-bg.test.js` | The appearance-only subset of `SIDEBAR_DEFAULTS` (no `open`) that "reset background" restores, so a deliberately hidden sidebar stays hidden. |
 | `restorableCaret` | `palette-caret.test.js` | Whether a saved caret `Range` may be re-applied when `closePalette` refocuses the block — start node still inside the block, else fall back to plain focus. Guards the caret restore that keeps ESC on a `/`-palette from jumping to the block start (issue #24). |
 | `caretScrollDelta` | `scroll-caret.test.js` | Pixels to scroll `#document-container` so the caret stays visible with a margin (positive = down, negative = up, 0 = fine). The seam behind `scrollCaretIntoView`, which keeps Enter from dropping the caret below the fold (issue #26). |
 | `parseTinyId` | `tiny.test.js` | `/s/<id>` path → validated tiny id, or `null`. |
@@ -191,7 +196,24 @@ otherwise the selection wraps around the ends.
 
 ---
 
-## `help.test.js` — the `/help` reference panel (6 tests)
+## Not unit-tested (browser-verified only)
+
+These ship without unit tests because they are DOM/interaction wiring with no pure
+seam worth extracting. They are verified by driving the real app in a browser:
+
+| Feature | Why no unit test | What to re-check by hand |
+|---------|------------------|--------------------------|
+| Tabline (`renderTabline`, `switchToTab`, `closeTab`) | Reads `location.hash` and mutates global note state; the interesting behaviour *is* the navigation. | Open several notes, switch, close the active and the last tab, reload — tabs restore and no note loses content. |
+| Line-number gutter (`renderLineNumbers`) | Pure DOM measurement against rendered blocks. | Numbers stay continuous across blocks and aligned as you type. |
+| `/settings` + `/help` floats | CSS class toggling on the existing palette. | Both centre, the title sits on the frame, Esc backs out to the command menu. |
+| Sidebar drag bars | `input` events on `<input type=range>`. | Dragging previews live; the value survives a reload. |
+
+`logos.test.js`, `palette-esc.test.js` and `themes.test.js` are also absent from the
+tables above — a pre-existing gap, not related to the sidebar work.
+
+---
+
+## `help.test.js` — the `/help` reference panel (7 tests)
 
 Covers `buildHelpList()`, the pure builder behind the read-only `/help` panel. The panel
 itself (a new `help` palette mode, non-interactive rows, Escape/Enter to dismiss) is DOM
@@ -202,7 +224,8 @@ wiring and is **browser-verified**, not here — only the list content is unit-t
 | opens with an intro row that mentions the URL | `list[0]` has no `heading` and its label/desc mentions "url". | The panel leads with the app's one-line pitch, not a command. |
 | has COMMANDS, SHORTCUTS and FORMATTING sections in order | The `heading` rows are exactly `['COMMANDS','SHORTCUTS','FORMATTING']`. | Pins the panel's structure and ordering. |
 | COMMANDS lists every command except help itself | Every `buildCommandList()` entry (id ≠ `help`) appears by label; `/help` does **not**. | The section is generated from `buildCommandList()`, so it can't drift — and help doesn't document itself. |
-| SHORTCUTS documents the core key bindings | Rows carry `kbd` values `⌘K`, `⌘⇧C`, `⌘.`, `/`, `Enter`, `⇧Enter`. | These match the real key handlers in `app.js`. |
+| SHORTCUTS documents the core key bindings | Rows carry `kbd` values `⌘K`, `⌘⇧C`, `⌘.`, `⌘B`, `/`, `Enter`, `⇧Enter`. | These match the real key handlers in `app.js`. |
+| SHORTCUTS documents the sidebar toggle | A row with `kbd === '⌘B'` exists and its label mentions "sidebar". | `⌘B` shipped undocumented; `/help` is the only place it's discoverable besides `/settings`. |
 | FORMATTING documents markdown syntax | `bold`/`italic`/`highlight` descs contain `**`/`*`/`==`; rows include heading, checklist, divider. | The syntax cheatsheet stays accurate. |
 | every row is either a heading or has a label | For each item, `heading` or `label` is truthy. | Guards the render contract (`renderPaletteList` branches on `heading`). |
 

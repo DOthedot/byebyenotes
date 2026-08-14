@@ -15,6 +15,11 @@ No accounts, no notes database. State is compressed with LZ-String into
   bundler, framework, transpiler, or npm runtime dependency.
 - **`blocks[]` is the source of truth, not the DOM.** Each block is
   `{ id, type: 'text'|'code', lang, content }`. See `AGENTS.md → Core architecture`.
+- **One note is open at a time, even with tabs.** `blocks[]` and `location.hash` still
+  hold exactly one note — the active tab's. A tab is only a reference (`nid`) to a
+  saved snapshot; switching tabs saves the current note, then loads the other's hash.
+- **The sidebar and the tabline are views onto `bbn.recent`**, the same localStorage
+  snapshot list the home screen renders. They add no new store.
 - **Deploy = push to `main`** → Vercel auto-deploys `byebyenotes.vercel.app`
   (`github.com/DOthedot/byebyenotes`). Commit/push only when the user asks.
 
@@ -22,12 +27,13 @@ No accounts, no notes database. State is compressed with LZ-String into
 
 | Path | What it is | Docs |
 |------|-----------|------|
-| `index.html` | Static DOM shell (empty-state, status bar, palette, share panel, FAB). | — |
-| `app.js` | **All** app logic (~2000 lines, one file on purpose). | `AGENTS.md` |
-| `style.css` | All styles + the 7 theme variable blocks. | — |
+| `index.html` | Static DOM shell (empty-state, app shell + sidebar + tabline, status bar, palette, share panel, FAB) and the inline pre-paint script that restores the sidebar's open/closed state. | — |
+| `app.js` | **All** app logic (~3100 lines, one file on purpose). | `AGENTS.md` |
+| `style.css` | All styles + the 13 theme variable blocks. | — |
 | `api/` | Vercel serverless functions (`sync.js`, `img.js`). | [`api/README.md`](./api/README.md) |
 | `tests/` | Jest (jsdom) unit tests for the **pure** functions. | [`tests/INDEX.md`](./tests/INDEX.md) |
 | `docs/` | Specs, plans, and mocks. | [`docs/README.md`](./docs/README.md) |
+| `assets/` | Wallpaper images for the sidebar background picker. | — |
 | `vercel.json` | SPA rewrite that excludes `/api/`. | — |
 
 ## Verification (one command)

@@ -49,7 +49,44 @@
     </div>
   </div>
 
-  <div id="document-container"></div>
+  <div id="app-shell">
+    <aside id="sidebar" aria-label="notes">
+      <div class="sb-head">
+        <span class="sb-tilde">~</span><span class="sb-path">byebyenotes</span>
+        <button id="sb-new" title="new note" aria-label="new note">+</button>
+      </div>
+      <nav id="sidebar-tree"></nav>
+      <div class="sb-foot"><span id="sb-count"></span></div>
+    </aside>
+    <div id="main-col">
+      <div id="tabline">
+        <div class="tabs" id="tabs"></div>
+        <button id="tab-new" title="new note (opens a tab)">+</button>
+        <button id="tab-help" title="help (?)">? help</button>
+      </div>
+      <div id="document-container"></div>
+    </div>
+  </div>
+
+  <script>
+    // Prevents a flash-of-open-sidebar on reload. app.js normally restores the
+    // sidebar via applySidebarCfg(normalizeSidebarCfg(...)) in DOMContentLoaded,
+    // but the CDN <script> tags below are render-blocking and not deferred, so
+    // the browser can paint #app-shell (default: sidebar open) well before that
+    // handler runs. This tiny inline script duplicates just the open/closed
+    // read — it can't call normalizeSidebarCfg() because app.js hasn't loaded
+    // yet. It defaults to open (matching SIDEBAR_DEFAULTS.open === true) on any
+    // doubt: prefs missing, malformed JSON, or an older shape with no sidebar
+    // key. The later DOMContentLoaded call remains the authority for the full
+    // config, including the --sb-* custom properties.
+    try {
+      var bbnPrefsRaw = localStorage.getItem('bbn.prefs');
+      var bbnPrefs = bbnPrefsRaw ? JSON.parse(bbnPrefsRaw) : null;
+      if (bbnPrefs && bbnPrefs.sidebar && bbnPrefs.sidebar.open === false) {
+        document.getElementById('app-shell').classList.add('no-sidebar');
+      }
+    } catch (e) {}
+  </script>
 
   <div id="status">
     <span id="status-mode" class="seg mode">ready</span>
@@ -74,6 +111,7 @@
       </div>
       <div id="palette-title"></div>
       <ul id="palette-list"></ul>
+      <div id="palette-bars" class="hidden"></div>
       <div id="palette-foot">
         <span><b>↑↓</b> navigate</span>
         <span><b>↵</b> select</span>

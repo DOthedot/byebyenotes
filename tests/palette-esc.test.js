@@ -25,3 +25,17 @@ test('unanchored lang / other modes ESC returns to the command menu', () => {
   expect(mod.paletteEscTarget('lang', false)).toBe('command');
   expect(mod.paletteEscTarget('theme', false)).toBe('command');
 });
+
+test('settings backs out to the command menu, like help', () => {
+  expect(mod.paletteEscTarget('settings', false)).toBe('command');
+});
+
+test('newItem backs out to the command menu', () => {
+  expect(mod.paletteEscTarget('newItem', false)).toBe('command');
+});
+
+test('newFolder backs out to the create chooser, not all the way to commands', () => {
+  // Escaping the folder-name prompt should return you to "new note / new folder",
+  // so a mistyped name is one keystroke from being retried.
+  expect(mod.paletteEscTarget('newFolder', false)).toBe('newItem');
+});
