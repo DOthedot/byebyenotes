@@ -58,7 +58,14 @@
       <nav id="sidebar-tree"></nav>
       <div class="sb-foot"><span id="sb-count"></span></div>
     </aside>
-    <div id="document-container"></div>
+    <div id="main-col">
+      <div id="tabline">
+        <div class="tabs" id="tabs"></div>
+        <button id="tab-new" title="new note (opens a tab)">+</button>
+        <button id="tab-help" title="help (?)">? help</button>
+      </div>
+      <div id="document-container"></div>
+    </div>
   </div>
 
   <script>
@@ -104,6 +111,7 @@
       </div>
       <div id="palette-title"></div>
       <ul id="palette-list"></ul>
+      <div id="palette-bars" class="hidden"></div>
       <div id="palette-foot">
         <span><b>↑↓</b> navigate</span>
         <span><b>↵</b> select</span>

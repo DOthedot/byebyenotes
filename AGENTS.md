@@ -17,12 +17,13 @@ No accounts, no database for notes. State is compressed with LZ-String into
 
 | File | Role |
 |------|------|
-| `index.html` | Static DOM shell: empty-state, status bar, palette, share panel, FAB. CDN `<script>` tags. |
-| `app.js` | **All** application logic (~2000 lines, intentionally one file). |
-| `style.css` | All styles + the 7 theme variable blocks. |
+| `index.html` | Static DOM shell: empty-state, `#app-shell` (sidebar + `#main-col` → tabline + document), status bar, palette, share panel, FAB. CDN `<script>` tags, plus one inline pre-paint script (see Gotcha 7). |
+| `app.js` | **All** application logic (~3100 lines, intentionally one file). |
+| `style.css` | All styles + the 13 theme variable blocks. |
 | `api/sync.js` | Serverless fn: recent-notes + prefs sync, keyed by `SHA-256(passphrase)`. |
 | `api/img.js` | Serverless fn: store/serve pasted images (client compresses first). |
 | `tests/*.test.js` | Jest (jsdom) unit tests for the **pure** functions. |
+| `assets/*.jpg` | Wallpaper images offered by the `/settings` sidebar background picker. |
 | `vercel.json` | SPA rewrite that excludes `/api/`. |
 
 CDN deps only (no npm runtime deps): highlight.js, lz-string, qrcodejs, html-docx-js.
@@ -41,7 +42,19 @@ Don't add dependencies without a strong reason.
   the hash via LZ-String. `renderMarkdown`, `capacityLevel`, snapshot merge, etc. are
   pure and unit-tested.
 - **Palettes**: `/` = caret-anchored insert/format menu; `Cmd/Ctrl+K` = bottom-left
-  command palette. Keep these two consistent and distinct.
+  command palette. Keep these two consistent and distinct. `/settings` and `/help`
+  reuse the same palette element but add a `.float` class that recentres it as a
+  lazy.nvim-style window — same keyboard model, different frame.
+- **Tabs do not mean several notes in memory.** `blocks[]` and `location.hash` still
+  hold exactly one note — the active tab's. `openTabs` is an array of snapshot ids
+  (`nid`), persisted in `bbn.prefs.tabs`. Switching tabs is *save the current note,
+  then load the other one's hash*; the `hashchange` listener re-renders and
+  `ensureActiveTab()` keeps the tabline honest. Anything that opens a note must go
+  through `switchToTab()` — see Gotcha 6.
+- **The sidebar tree and the tabline are views onto `bbn.recent`**, the same
+  localStorage snapshot list the home screen renders via `renderRecent()`. They
+  introduce no new store, and they share the `collapsedFolders` Set so fold state
+  can't diverge between the two views.
 
 ## Gotchas that will bite you (hard-won)
 
@@ -60,6 +73,23 @@ Don't add dependencies without a strong reason.
    tested against the deployed site (or `vercel dev`). They degrade gracefully to 503.
 5. **`/` is context-sensitive** (selection → format, word-boundary → insert, mid-word
    / code block → literal slash). Preserve this in the block keydown handler.
+6. **Never navigate to another note by setting `location.hash` directly.** `syncNow()`
+   is debounced ~800ms, so a pending autosave from the note you are leaving will fire
+   *after* `noteId` has already changed and write the old blocks under the new id —
+   silently overwriting the note you just opened. Call `switchToTab(nid)`, which
+   flushes the pending save first. This bit the sidebar before tabs existed.
+7. **Anything that must be right before first paint cannot live in `DOMContentLoaded`.**
+   The CDN `<script>` tags in `index.html` are render-blocking and not deferred, so
+   `DOMContentLoaded` fires only after those network round trips — long enough for the
+   browser to paint a sidebar the user had closed. The small inline script after
+   `#app-shell` exists for exactly this, and duplicates only the open/closed read
+   (it runs before `app.js`, so it cannot call `normalizeSidebarCfg()`).
+8. **Filters belong on a layer, not on the panel.** `#sidebar::before` carries the
+   wallpaper and its `blur()`/`brightness()`/`saturate()`; `#sidebar::after` is the
+   readability scrim. Putting them on `#sidebar` itself would smear the file names.
+9. **Sidebar/tab prefs arrive from other devices.** `bbn.prefs` is synced, so any
+   value read from it is untrusted: run it through `normalizeSidebarCfg()` (clamps
+   every range, rejects unknown wallpaper ids) before it reaches a CSS property.
 
 ## Local dev & verification
 
