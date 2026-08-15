@@ -41,3 +41,14 @@ test('decodeState returns null for empty hash', () => {
 test('decodeState returns null for corrupt hash', () => {
   expect(decodeState('!!!not-valid!!!')).toBeNull();
 });
+
+test('only a genuinely current row is auto-selected, not a toggle badge', () => {
+  // Regression: the "open on the current value" logic also matched hint:'on',
+  // which /sync and /save_before_new use as a plain toggle badge. saveBeforeNew
+  // defaults to true, so Cmd+K opened on it and a reflex Enter flipped a setting.
+  const list = require('../app.js').buildCommandList();
+  const badged = list.filter(i => i.hint === 'on');
+  expect(badged.length).toBeGreaterThan(0);          // the collision is still reachable
+  expect(badged.every(i => i.current !== true)).toBe(true);
+  expect(list.filter(i => i.current === true)).toHaveLength(0);
+});

@@ -119,13 +119,16 @@ const WALLPAPERS = [
   { id: 'stars',  name: 'starfield',  css: 'radial-gradient(1.4px 1.4px at 18% 22%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 62% 12%,var(--fg-dim),transparent),radial-gradient(1.6px 1.6px at 38% 62%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 82% 78%,var(--fg-dim),transparent)' },
 ];
 
-const SIDEBAR_DEFAULTS = { wall: 'none', opacity: 45, blur: 2, bright: 100, sat: 110, scrim: 55, pos: 'center', open: true };
-const SIDEBAR_RANGES   = { opacity: [0, 100], blur: [0, 24], bright: [30, 180], sat: [0, 200], scrim: [0, 100] };
+const SIDEBAR_DEFAULTS = { wall: 'none', opacity: 45, blur: 2, bright: 100, sat: 110, scrim: 55, posX: 50, posY: 50, open: true, custom: '' };
+const SIDEBAR_RANGES   = { opacity: [0, 100], blur: [0, 24], bright: [30, 180], sat: [0, 200], scrim: [0, 100], posX: [0, 100], posY: [0, 100] };
 const SIDEBAR_POSITIONS = ['top', 'center', 'bottom'];
 // What "reset background" restores — the appearance fields and nothing else. `open`
 // is a deliberate user choice (⌘B / "hide sidebar"), not part of the wallpaper look.
+// "reset background" restores the *look* only. `open` is a panel state, and
+// `custom` is the image the user uploaded — discarding either on a reset would
+// destroy something they'd have to redo by hand.
 const SIDEBAR_LOOK_DEFAULTS = Object.fromEntries(
-  Object.entries(SIDEBAR_DEFAULTS).filter(([k]) => k !== 'open')
+  Object.entries(SIDEBAR_DEFAULTS).filter(([k]) => k !== 'open' && k !== 'custom')
 );
 // Below this viewport width the panel is display:none (see the media query in
 // style.css) — the two must stay in step or ⌘B writes a state nobody can see.
@@ -175,6 +178,9 @@ let fab;
 let sidebarEl, sidebarTree, sidebarCount, appShell, sbNew;
 let tablineEl, tabsEl, paletteBars;
 let barSaveTimer = null;
+let nextFolderParent = null;   // folder the /newFolder prompt should nest under
+let selectCurrentOnce = false;  // one-shot: open a list on its current value
+let renameTarget = null;       // nid being renamed by the /rename prompt
 let nextNoteFolder = null;  // folder name typed in the /newFolder prompt
 let pendingFolder  = null;  // { nid, folder } — bound to a specific note, never "the next save"
 const lineNumbersOn = true;  // vim gutter — always on; kept as one named seam to disable it
@@ -266,11 +272,36 @@ function toggleCheckboxLine(text, lineIdx) {
   return lines.join('\n');
 }
 
+// Strip the markup a line carries so a title reads as words, not source. Titles
+// end up in the sidebar, the tabline and the recents list, where raw syntax
+// ("==red:# there are things", "![image|480](https://…)") is unreadable.
+function stripTitleMarkup(line) {
+  return (line || '')
+    .replace(/^\s*#{1,6}\s+/, '')             // heading
+    .replace(/^\s*>\s+/, '')                  // blockquote
+    .replace(/^\s*- \[[ xX]\]\s+/, '')        // checkbox (before the plain bullet)
+    .replace(/^\s*[-*+]\s+/, '')              // bullet
+    .replace(/!\[([^\]]*?)(?:\|[^\]]*)?\]\([^)]*\)/g, '$1')  // image → alt text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')  // link → text
+    .replace(/==(?:[a-z]+:)?([^=]*)==/gi, '$1') // highlight, incl. ==red:x==
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')        // bold
+    .replace(/(\*|_)(.*?)\1/g, '$2')            // italic
+    .replace(/~~(.*?)~~/g, '$1')               // strikethrough
+    .replace(/`([^`]*)`/g, '$1')               // inline code
+    .replace(/^\s*#{1,6}\s*/, '')             // a heading revealed by the above
+    .trim();
+}
+
 function noteTitle(blockList) {
-  for (const b of blockList) {
-    const line = (b.content || '').split('\n').find(l => l.trim() && !/^---+\s*$/.test(l));
-    if (line) {
-      return line.replace(/^#{1,3} /, '').replace(/^- \[[ xX]\] /, '').replace(/^- /, '').trim().slice(0, 48);
+  for (const b of blockList || []) {
+    const lines = (b.content || '').split('\n');
+    for (const raw of lines) {
+      if (!raw.trim()) continue;
+      if (/^\s*(?:---+|\*\*\*+|___+)\s*$/.test(raw)) continue;   // divider
+      const cleaned = stripTitleMarkup(raw);
+      // A line that was pure markup cleans down to nothing — keep looking rather
+      // than titling the note with an empty string.
+      if (cleaned) return cleaned.slice(0, 48);
     }
   }
   return 'untitled';
@@ -334,27 +365,83 @@ function groupByFolder(snaps) {
   return { loose, folders: [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])) };
 }
 
-// Flatten snapshots into the ordered rows the sidebar tree renders: folders
-// first (each followed by its notes unless folded), then loose notes. Pure —
-// the DOM is built from these rows, never read back from.
-function buildTreeRows(snaps, folded) {
+// A folder is a free string on the snapshot, so a path like "work/api" expresses
+// nesting with no schema change: split on "/" and the tree falls out. Normalising
+// here means a hand-edited or synced value with stray slashes still renders.
+const FOLDER_MAX_DEPTH = 12;   // deeper than anyone nests; keeps the walk bounded
+
+function folderSegments(folder) {
+  // `folder` is untrusted: it comes from localStorage and from other devices via
+  // /api/sync. Unbounded depth recursed until the stack blew inside renderSidebar,
+  // taking the whole app with it — so truncate rather than trust.
+  return String(folder || '')
+    .split('/')
+    .map(x => x.trim())
+    .filter(Boolean)
+    .slice(0, FOLDER_MAX_DEPTH);
+}
+
+// Flatten snapshots into the ordered rows the sidebar tree renders: a depth-first
+// walk of the folder tree, then loose notes. Pure — the DOM is built from these
+// rows, never read back from.
+function buildTreeRows(snaps, folded, extraFolders) {
   const list = Array.isArray(snaps) ? snaps : [];
-  const has = (name) => !!(folded && typeof folded.has === 'function' && folded.has(name));
-  const { loose, folders } = groupByFolder(list);
-  const rows = [];
-  const note = (s, folder) => ({
+  const isFolded = (path) => !!(folded && typeof folded.has === 'function' && folded.has(path));
+
+  const root = { children: new Map(), notes: [] };
+  const loose = [];
+
+  const ensure = (segs) => {
+    let node = root;
+    segs.forEach(seg => {
+      if (!node.children.has(seg)) node.children.set(seg, { children: new Map(), notes: [] });
+      node = node.children.get(seg);
+    });
+    return node;
+  };
+
+  // Folders the user created explicitly. Without these a folder could only exist
+  // where a note already lived, so "new folder" looked like it did nothing until
+  // you also wrote a note in it.
+  (Array.isArray(extraFolders) ? extraFolders : []).forEach(f => {
+    const segs = folderSegments(f);
+    if (segs.length) ensure(segs);
+  });
+
+  list.forEach(s => {
+    const segs = folderSegments(s.folder);
+    if (!segs.length) { loose.push(s); return; }
+    ensure(segs).notes.push(s);
+  });
+
+  const note = (s, folder, depth) => ({
     kind: 'note',
     nid: s.nid,
     title: s.title || 'untitled',
     folder,
+    depth,
     t: s.t || 0,
   });
-  folders.forEach(([name, items]) => {
-    const isFolded = has(name);
-    rows.push({ kind: 'folder', name, count: items.length, folded: isFolded });
-    if (!isFolded) items.forEach(s => rows.push(note(s, name)));
-  });
-  loose.forEach(s => rows.push(note(s, null)));
+
+  // Every note beneath this folder, however deep — a collapsed parent should still
+  // report the size of the whole branch it is hiding.
+  const deepCount = (node) =>
+    node.notes.length + [...node.children.values()].reduce((n, c) => n + deepCount(c), 0);
+
+  const rows = [];
+  const walk = (node, prefix, depth) => {
+    [...node.children.keys()].sort((a, b) => a.localeCompare(b)).forEach(name => {
+      const child = node.children.get(name);
+      const path = prefix ? prefix + '/' + name : name;
+      const collapsed = isFolded(path);
+      rows.push({ kind: 'folder', name, path, count: deepCount(child), folded: collapsed, depth });
+      if (collapsed) return;                       // hides the entire subtree
+      child.notes.forEach(s => rows.push(note(s, path, depth + 1)));
+      walk(child, path, depth + 1);
+    });
+  };
+  walk(root, '', 0);
+  loose.forEach(s => rows.push(note(s, null, 0)));
   return rows;
 }
 
@@ -368,8 +455,12 @@ function normalizeSidebarCfg(raw) {
     const n = (src[k] === null || src[k] === undefined) ? NaN : Number(src[k]);
     cfg[k] = Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : SIDEBAR_DEFAULTS[k];
   });
-  cfg.wall = WALLPAPERS.some(w => w.id === src.wall) ? src.wall : SIDEBAR_DEFAULTS.wall;
-  cfg.pos  = SIDEBAR_POSITIONS.indexOf(src.pos) >= 0 ? src.pos : SIDEBAR_DEFAULTS.pos;
+  cfg.wall = (src.wall === 'custom' || WALLPAPERS.some(w => w.id === src.wall)) ? src.wall : SIDEBAR_DEFAULTS.wall;
+  // A user-supplied image is a data: URI we produced ourselves (canvas → JPEG).
+  // Accept only that shape — a synced prefs blob is untrusted input, and anything
+  // else here would end up inside a CSS url().
+  cfg.custom = (typeof src.custom === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(src.custom))
+    ? src.custom : '';
   cfg.open = src.open === undefined ? SIDEBAR_DEFAULTS.open : !!src.open;
   return cfg;
 }
@@ -377,7 +468,9 @@ function normalizeSidebarCfg(raw) {
 // A normalized config becomes the custom properties the panel's ::before/::after read.
 // Filters live on those layers, never on #sidebar itself, so the file names stay sharp.
 function sidebarCssVars(cfg) {
-  const wall = WALLPAPERS.find(w => w.id === cfg.wall) || WALLPAPERS[0];
+  const wall = cfg.wall === 'custom' && cfg.custom
+    ? { css: `url("${cfg.custom}")` }
+    : (WALLPAPERS.find(w => w.id === cfg.wall) || WALLPAPERS[0]);
   return {
     '--sb-img':     wall.css,
     '--sb-opacity': String(cfg.opacity / 100),
@@ -385,7 +478,7 @@ function sidebarCssVars(cfg) {
     '--sb-bright':  String(cfg.bright / 100),
     '--sb-sat':     String(cfg.sat / 100),
     '--sb-scrim':   String(cfg.scrim / 100),
-    '--sb-pos':     cfg.pos,
+    '--sb-pos':     cfg.posX + '% ' + cfg.posY + '%',
   };
 }
 
@@ -484,11 +577,12 @@ async function syncPull() {
   const localPrefs = loadPrefs();
   if (data.prefs && (data.prefs.t || 0) > (localPrefs.t || 0)) {
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(data.prefs)); } catch (e) {}
-    // Apply visually unless a note's own theme/font is on screen
-    if (!window.location.hash) {
-      if (THEMES.includes(data.prefs.theme)) applyTheme(data.prefs.theme);
-      if (FONTS.includes(data.prefs.font))   applyFont(data.prefs.font);
-    }
+    // Your chosen theme/font are *yours*, not the note's: loadState already lets
+    // your prefs win for any note in your own recents. Gating this on an empty
+    // hash meant a pull only ever repainted the start screen — with a note open,
+    // which is almost always, synced theme and font were stored and never shown.
+    if (THEMES.includes(data.prefs.theme)) applyTheme(data.prefs.theme);
+    if (FONTS.includes(data.prefs.font))   applyFont(data.prefs.font);
     // Sidebar background/opacity/blur isn't tied to the note on screen, so it
     // always applies live — pulled through normalizeSidebarCfg since a remote
     // config must never reach a CSS property unvalidated.
@@ -507,7 +601,14 @@ function pushNow() {
     keepalive: true,   // survives tab close mid-request
     headers: { 'x-sync-key': syncKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({ recents: loadSnapshots(), prefs: loadPrefs() }),
-  }).catch(() => {});
+  }).then(res => {
+    // A rejected PUT used to vanish into .catch(() => {}), so sync could be dead
+    // for hours without a sign. 413 is the one a user can actually act on.
+    if (res.ok) return;
+    flashCopied(res.status === 413
+      ? "sync failed — too much saved. remove a background image or some notes."
+      : `sync failed (${res.status})`);
+  }).catch(() => flashCopied('sync failed — server unreachable'));
 }
 
 function schedulePush() {
@@ -843,6 +944,8 @@ function buildCommandList() {
     { id: 'delete', label: '/delete', ico: '✕',  desc: 'delete current block' },
     { id: 'home',    label: '/home',    ico: '⌂', desc: 'back to the start screen' },
     { id: 'newNote', label: '/newNote', ico: '✚', desc: 'start a fresh note' },
+    { id: 'newFolder', label: '/newFolder', ico: '▸', desc: 'create a folder and start a note in it' },
+    { id: 'rename',    label: '/rename',    ico: '✎', desc: 'rename the current note' },
     { id: 'saveBeforeNew', label: '/save_before_new', ico: '⋯', desc: 'save before new note', hint: saveBeforeNew ? 'on' : 'off' },
     { id: 'help',   label: '/help',   ico: '?', desc: 'commands, shortcuts & formatting' },
   ];
@@ -963,6 +1066,10 @@ function openPalette(mode, opts = {}) {
   // palette to redraw the values they just changed, and stepping opacity/blur is only
   // useful repeated: without this, Enter #2 would fire row 0 ("hide sidebar") instead.
   const keptIndex = opts.keep ? paletteIndex : 0;
+  // A list with a current value (theme, font) should open *on* that value, so ↑/↓
+  // moves relative to where you are instead of jumping you to the top. The items
+  // don't exist yet here, so flag it and let renderPaletteList apply it once.
+  selectCurrentOnce = !opts.keep;
   const keptQuery = opts.keep ? paletteSearch.value : '';
   // The pending folder is only ever legal across newFolder → filename → newNote.
   // Any other mode transition means that flow was abandoned (escape out of the
@@ -970,6 +1077,8 @@ function openPalette(mode, opts = {}) {
   // it here rather than let it misfile whatever note is created next. This is the
   // third bug from this one global; sweeping at every hop closes the class.
   if (mode !== 'filename' && mode !== 'newFolder') nextNoteFolder = null;
+  if (mode !== 'newFolder') nextFolderParent = null;
+  if (mode !== 'rename') renameTarget = null;
 
   paletteMode  = mode;
   paletteIndex = keptIndex;
@@ -1044,7 +1153,12 @@ function openPalette(mode, opts = {}) {
       { id: 'ni-folder', label: 'new folder', ico: '▸', desc: 'name it, and start a note inside' },
     ];
   } else if (mode === 'newFolder') {
-    paletteTitle.textContent = 'NEW FOLDER';
+    paletteTitle.textContent = nextFolderParent ? `NEW FOLDER IN ${nextFolderParent}/` : 'NEW FOLDER';
+    paletteItems = [];
+  } else if (mode === 'rename') {
+    const s0 = loadSnapshots().find(x => x.nid === renameTarget);
+    paletteTitle.textContent = 'RENAME';
+    paletteSearch.value = (s0 && s0.title) || '';
     paletteItems = [];
   } else if (mode === 'settings') {
     const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
@@ -1060,7 +1174,8 @@ function openPalette(mode, opts = {}) {
   const keptRows = filterPaletteItems(paletteItems, keptQuery);
   const keepable = keptRows.length > 0;
   paletteSearch.value       = keepable ? keptQuery : '';
-  paletteSearch.placeholder = mode === 'newFolder' ? 'folder name...'
+  paletteSearch.placeholder = mode === 'rename' ? 'new name (empty = derive from content)...'
+    : mode === 'newFolder' ? 'folder name...'
     : mode === 'filename' ? 'enter filename...'
     : mode === 'syncPhrase' ? 'enter a passphrase (6+ chars)...'
     : mode === 'folder' ? 'pick, or type a new folder name...'
@@ -1103,6 +1218,18 @@ function positionPalette() {
 
 function renderPaletteList(items) {
   paletteFiltered = items;
+  // Land on the row marked current unless this is a refresh that already carries a
+  // selection, or the user has typed a filter. Set by openPalette and consumed once:
+  // renderPaletteList also runs on every keystroke, where re-homing the cursor onto
+  // the current value would fight the user's own ↑/↓.
+  if (selectCurrentOnce && !paletteSearch.value) {
+    // `current` only. `hint: 'on'` is a toggle badge (/sync, /save_before_new) —
+    // homing on it made Cmd+K open on /save_before_new, where a habitual Enter
+    // silently toggled the setting.
+    const cur = items.findIndex(it => it && it.current === true);
+    if (cur >= 0) paletteIndex = cur;
+  }
+  selectCurrentOnce = false;
   paletteIndex = Math.min(paletteIndex, Math.max(0, items.length - 1));
   paletteList.innerHTML = '';
   items.forEach((item, i) => {
@@ -1206,6 +1333,10 @@ function closePalette() {
   // next new-note flow silently files an unrelated note into that folder. The
   // /newFolder branch sets this *after* calling closePalette, so it survives there.
   nextNoteFolder = null;
+  // Same again for the parent folder: dismissing a "new folder inside work/" prompt
+  // by clicking the backdrop bypasses openPalette's per-hop sweep, so a later
+  // /newFolder would silently nest under the stale parent.
+  nextFolderParent = null;
   if (activeBlockId !== null && (!emptyVisible || wasAnchored)) {
     const content = getContentEl(activeBlockId);
     // A block that already has markdown hides its editable layer when blurred; reveal
@@ -1231,6 +1362,7 @@ function closePalette() {
 function paletteEscTarget(mode, hasAnchor) {
   if (mode === 'command' || mode === 'insert' || mode === 'format') return 'close';
   if (mode === 'newFolder') return 'newItem';
+  if (mode === 'rename') return 'command';
   if (mode === 'help' || mode === 'settings' || mode === 'newItem') return 'command';
   if (mode === 'lang' && hasAnchor) return 'insert';
   return 'command';
@@ -1280,15 +1412,28 @@ function confirmPalette() {
 
   // Folders are a field on a snapshot, not their own record, so an empty folder
   // cannot exist — creating one means starting the first note inside it.
-  if (paletteMode === 'newFolder') {
-    const name = paletteSearch.value.trim().replace(/\/+$/, '');
+  if (paletteMode === 'rename') {
+    const name = paletteSearch.value.trim();
+    const target = renameTarget;
     closePalette();
-    if (!name) return;
-    // Bind via nextNoteFolder, not pendingFolder: startNewNote() flushes the
-    // *outgoing* note first, and a bare "apply to the next save" would file that
-    // note into the folder instead of the one we're about to create.
-    nextNoteFolder = name;
-    startNewNote();
+    if (target) applyRename(target, name);
+    return;
+  }
+
+  if (paletteMode === 'newFolder') {
+    const typed = paletteSearch.value.trim().replace(/^\/+|\/+$/g, '');
+    // A folder created from a folder row nests under it; from the + button it's
+    // top level. Either way the value is a path, which buildTreeRows splits.
+    const path = nextFolderParent ? nextFolderParent + '/' + typed : typed;
+    nextFolderParent = null;
+    closePalette();
+    if (!typed) return;
+    // Create the folder and stop. This used to start a note inside it, which meant
+    // detouring through the save-before-new export prompt — and because a brand-new
+    // note is empty it never saved, so no snapshot existed and the folder never
+    // appeared. It looked like "create folder" silently stored a file instead.
+    const made = addFolder(path);
+    if (made) flashCopied(`created ${made}/`);
     return;
   }
 
@@ -1382,6 +1527,8 @@ function confirmPalette() {
       return;
     }
     if (selected.id === 'newNote') { startNewNote(); return; }
+    if (selected.id === 'newFolder') { openPalette('newFolder'); return; }
+    if (selected.id === 'rename')    { renameTarget = noteId; openPalette('rename'); return; }
     if (selected.id === 'saveBeforeNew') {
       saveBeforeNew = !saveBeforeNew;
       closePalette();
@@ -1561,7 +1708,10 @@ function syncNow() {
       nid: noteId,
       hash,
       folder,
-      title: noteTitle(state.blocks),
+      // A renamed note keeps its explicit title; otherwise it re-derives from the
+      // content, so editing a note still refreshes its name in the tree.
+      title: (prev && prev.renamed && prev.title) ? prev.title : noteTitle(state.blocks),
+      renamed: !!(prev && prev.renamed),
       blockCount: state.blocks.length,
       langs,
       t: Date.now(),
@@ -1881,6 +2031,8 @@ function renderLineNumbers() {
 // Sliders, not ± commands: dragging is how you find the right blur. The palette
 // stays keyboard-first — these are extra, and every bar is reachable by Tab.
 const SIDEBAR_BARS = [
+  { key: 'posX',    label: 'pan across', unit: '%'  },
+  { key: 'posY',    label: 'pan down',   unit: '%'  },
   { key: 'opacity', label: 'opacity',    unit: '%'  },
   { key: 'blur',    label: 'blur',       unit: 'px' },
   { key: 'bright',  label: 'brightness', unit: '%'  },
@@ -1908,6 +2060,12 @@ function renderSidebarBars(show) {
                   <span>${escapeHtml(w.name)}</span>
                 </button>`;
       }).join('') +
+      (cfg.custom
+        ? `<button class="pal-swatch${cfg.wall === 'custom' ? ' on' : ''}" data-wall="custom"
+             title="your image" style="background-image:url('${cfg.custom}')"><span>yours</span></button>`
+        : '') +
+      `<button class="pal-swatch pal-upload" data-upload="1" title="use an image from your computer">
+         <span>+ upload</span></button>` +
     `</div>` +
     `<div class="pal-sect">image</div>` +
     SIDEBAR_BARS.map(b => {
@@ -1919,13 +2077,7 @@ function renderSidebarBars(show) {
         <output id="po-${b.key}">${cfg[b.key]}${b.unit}</output>
       </div>`;
     }).join('') +
-    `<div class="pal-bar">
-       <label for="pb-pos">position</label>
-       <input id="pb-pos" type="range" min="0" max="2" step="1"
-              value="${SIDEBAR_POSITIONS.indexOf(cfg.pos)}" data-bar="pos" />
-       <output id="po-pos">${cfg.pos}</output>
-     </div>` +
-    `<div class="pal-bars-hint">drag to adjust · changes preview live</div>`;
+    `<div class="pal-bars-hint">drag to adjust · changes preview live · ←/→ on a focused bar</div>`;
 }
 
 // Live-drag writes straight to the DOM and defers the (synced) save, so dragging a
@@ -1935,17 +2087,90 @@ function onSidebarBarInput(e) {
   if (!input) return;
   const key = input.dataset.bar;
   const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
-  if (key === 'pos') {
-    cfg.pos = SIDEBAR_POSITIONS[Number(input.value)] || 'center';
-    document.getElementById('po-pos').textContent = cfg.pos;
-  } else {
-    cfg[key] = Number(input.value);
-    const unit = (SIDEBAR_BARS.find(b => b.key === key) || {}).unit || '';
-    document.getElementById('po-' + key).textContent = input.value + unit;
-  }
+  cfg[key] = Number(input.value);
+  const unit = (SIDEBAR_BARS.find(b => b.key === key) || {}).unit || '';
+  const out = document.getElementById('po-' + key);
+  if (out) out.textContent = input.value + unit;
   applySidebarCfg(normalizeSidebarCfg(cfg));   // preview only
   clearTimeout(barSaveTimer);
   barSaveTimer = setTimeout(() => saveSidebarCfg(cfg), 250);
+}
+
+// Read an image from disk, downscale it hard, and keep it in prefs so it syncs
+// like every other setting. Full-size would blow past api/sync.js's 400KB cap on
+// the whole prefs blob; 640px wide at JPEG q62 lands around 40-60KB.
+function pickSidebarImage() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onerror = () => flashCopied("couldn't read that file");
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => flashCopied("that doesn't look like an image");
+      img.onload = () => {
+        const maxW = 640;
+        const scale = Math.min(1, maxW / (img.naturalWidth || maxW));
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.max(1, Math.round((img.naturalWidth  || maxW) * scale));
+        canvas.height = Math.max(1, Math.round((img.naturalHeight || maxW) * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        let data;
+        try {
+          data = canvas.toDataURL('image/jpeg', 0.62);
+        } catch (e) {
+          return flashCopied("couldn't process that image");
+        }
+        // Re-encoding through a canvas is also the sanitiser: whatever the file
+        // contained, what we store is pixels we drew ourselves.
+        // Well under api/sync.js's 400KB cap for the ENTIRE prefs+recents payload —
+        // the image is one field in that blob, not the whole budget.
+        if (data.length > 120000) return flashCopied('image too detailed to store — try a simpler one');
+        saveSidebarCfg({ custom: data, wall: 'custom' });
+        renderSidebarBars(true);
+        flashCopied('background set from your image');
+      };
+      img.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
+  input.click();
+}
+
+// Folders the user created, kept in prefs so they sync like every other setting
+// and so an empty folder is a real thing rather than a side effect of where notes
+// happen to live.
+function loadFolders() {
+  const raw = loadPrefs().folders;
+  return Array.isArray(raw) ? raw.filter(f => typeof f === 'string' && folderSegments(f).length) : [];
+}
+
+function saveFolders(list) {
+  try {
+    const prefs = loadPrefs();
+    prefs.folders = [...new Set(list.map(f => folderSegments(f).join('/')).filter(Boolean))].sort();
+    localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { t: Date.now() })));
+  } catch (e) { /* storage unavailable — folders stay session-only */ }
+  schedulePush();
+}
+
+function addFolder(path) {
+  const clean = folderSegments(path).join('/');
+  if (!clean) return null;
+  saveFolders([...loadFolders(), clean]);
+  collapsedFolders.delete(clean);   // a folder you just made should be open
+  renderSidebar();
+  return clean;
+}
+
+// Forgets the folder and everything beneath it. Notes are unfiled by the caller,
+// never deleted — losing notes to a mis-click on a folder would be far worse.
+function removeFolder(path) {
+  const clean = folderSegments(path).join('/');
+  saveFolders(loadFolders().filter(f => f !== clean && !f.startsWith(clean + '/')));
 }
 
 // ── Sidebar row presentation ─────────────────────────────────────────────────
@@ -1969,7 +2194,11 @@ function soleLang(snap) {
 // Give each row a filename, the way a file tree shows one — "notes" becomes
 // "notes.md". Titles that already carry the extension aren't doubled up.
 function fileLabel(title, snap) {
-  const name = (title || 'untitled').trim() || 'untitled';
+  // Strip at render time as well as at save time: snapshots written before the
+  // markup fix (or synced from a device still running it) carry raw titles like
+  // "==red:# there are things==", and re-saving every note to clean them up is
+  // not something the user should have to do.
+  const name = (stripTitleMarkup(title) || 'untitled').trim() || 'untitled';
   const ext  = SB_EXT[soleLang(snap)] || 'md';
   return name.toLowerCase().endsWith('.' + ext) ? name : name + '.' + ext;
 }
@@ -2012,7 +2241,7 @@ function renderTabline() {
   tabsEl.innerHTML = '';
   openTabs.forEach((nid, i) => {
     const snap = snaps.find(s => s.nid === nid);
-    const title = nid === noteId ? noteTitle(blocks) : (snap ? snap.title : 'untitled');
+    const title = nid === noteId ? noteTitle(blocks) : stripTitleMarkup((snap && snap.title) || '') || 'untitled';
     const b = document.createElement('button');
     b.className = 'tab' + (nid === noteId ? ' active' : '');
     b.dataset.tab = nid;
@@ -2039,7 +2268,10 @@ function ensureActiveTab() {
   renderTabline();
 }
 
-function switchToTab(nid) {
+// opts.skipLeavingSave: don't flush the note being left. Only the delete flow uses
+// it — there the note we're "leaving" has just been removed on purpose, and the
+// usual flush would write it straight back into recents.
+function switchToTab(nid, opts = {}) {
   if (nid === noteId) return;
   const snap = loadSnapshots().find(s => s.nid === nid);
   if (!snap || !isOpenableSnapshot(snap)) {
@@ -2048,7 +2280,7 @@ function switchToTab(nid) {
     saveTabs(); renderTabline();
     return;
   }
-  syncNow();                       // the note we're leaving must land in recents first
+  if (!opts.skipLeavingSave) syncNow();   // the note we're leaving must land in recents first
   dissolveEmptyState();
   window.location.hash = snap.hash;   // hashchange listener re-renders from the URL
 }
@@ -2079,29 +2311,118 @@ function startFreshNote() {
   newNote();   // registers its own tab
 }
 
+// Deleting from the tree removes the snapshot. The note itself is unaffected if it
+// is the one on screen — its content still lives in the URL — so this is "forget
+// this note", not "destroy it".
+function deleteNoteFromTree(nid) {
+  const snap = loadSnapshots().find(s => s.nid === nid);
+  // For any note that isn't the one on screen, this is the only copy — its content
+  // lives in a hash nobody has open. A mis-click on a 16px ✕ shouldn't lose it.
+  const label = stripTitleMarkup((snap && snap.title) || '') || 'this note';
+  if (!window.confirm(`Remove "${label}" from your notes?\n\nIts content is not recoverable from here.`)) return;
+
+  const wasOpen = nid === noteId;
+  deleteSnapshot(nid);
+  openTabs = openTabs.filter(t => t !== nid);
+  saveTabs();
+
+  // Deleting the note that is *on screen* has to clear the editor too. blocks[],
+  // noteId and location.hash all still held it, so the very next autosave — a
+  // keystroke, a blur, the 800ms debounce — called saveSnapshot() and quietly
+  // resurrected the note the user had just confirmed removing.
+  if (wasOpen) {
+    clearTimeout(syncTimer);          // kill the pending save before it re-adds it
+    const next = openTabs.find(t => loadSnapshots().some(s => s.nid === t));
+    // skipLeavingSave: switchToTab would otherwise syncNow() the note we just
+    // deleted — noteId/blocks[] still hold it — writing it straight back in.
+    if (next) switchToTab(next, { skipLeavingSave: true });
+    else startFreshNote();
+  }
+
+  renderSidebar(); renderTabline();
+  flashCopied(`removed "${label}" from your notes`);
+}
+
+// Deleting a folder never deletes notes — it unfiles them, moving the branch's
+// notes back to the top level. Losing notes to a mis-click on a folder would be
+// far worse than an untidy root.
+function deleteFolderFromTree(path) {
+  const segs = folderSegments(path).join('/');
+  // Notes survive — they move to the top level — so this warns rather than alarms.
+  if (!window.confirm(`Delete the folder "${segs}"?\n\nNotes inside it are kept and moved to the top level.`)) return;
+  let moved = 0;
+  loadSnapshots().forEach(s => {
+    const f = folderSegments(s.folder).join('/');
+    if (f === segs || f.startsWith(segs + '/')) { assignFolder(s.nid, null); moved++; }
+  });
+  collapsedFolders.delete(path);
+  removeFolder(path);          // forget the folder itself, not just its contents
+  renderSidebar();
+  flashCopied(moved ? `unfiled ${moved} note${moved === 1 ? '' : 's'} from ${segs}/` : `removed ${segs}/`);
+}
+
+function startRename(nid) {
+  renameTarget = nid;
+  openPalette('rename');
+}
+
+// An explicit title on the snapshot wins over the one derived from the first
+// heading; clearing it falls back to derivation, so a rename is never permanent.
+function applyRename(nid, title) {
+  try {
+    const list = loadSnapshots();
+    const s = list.find(x => x.nid === nid);
+    if (s) {
+      const t = (title || '').trim();
+      if (t) {
+        s.title = t.slice(0, 48);
+        s.renamed = true;
+      } else {
+        // Clearing the name goes back to deriving from the note's own content.
+        // Deleting the field alone would leave the row reading "untitled" until
+        // the note happened to be edited and re-saved.
+        const state = decodeState(s.hash || '');
+        s.title = (state && Array.isArray(state.blocks)) ? noteTitle(state.blocks) : 'untitled';
+        s.renamed = false;
+      }
+      localStorage.setItem(SNAP_KEY, JSON.stringify(list));
+    }
+  } catch (e) { /* storage unavailable — rename is cosmetic, don't break the app */ }
+  schedulePush();
+  renderSidebar(); renderTabline();
+  if (emptyVisible) renderRecent();
+}
+
 function renderSidebar() {
   if (!sidebarTree) return;
   const snaps = loadSnapshots();
-  const rows  = buildTreeRows(snaps, collapsedFolders);
+  const rows  = buildTreeRows(snaps, collapsedFolders, loadFolders());
   sidebarTree.innerHTML = '';
   rows.forEach(r => {
     const b = document.createElement('button');
     b.className = 'sb-row' + (r.kind === 'folder' ? ' dir' : '');
+    // One indent step per nesting level. Notes sit one step in from their folder.
+    b.style.paddingLeft = (10 + r.depth * 14) + 'px';
     if (r.kind === 'folder') {
-      b.dataset.folder = r.name;
+      // Fold state is keyed by full path, not name: "work/api" and "personal/api"
+      // are different folders that must collapse independently.
+      b.dataset.folder = r.path;
       b.innerHTML =
         `<span class="sb-chev">${r.folded ? '▸' : '▾'}</span>` +
         `<span class="sb-name">${escapeHtml(r.name)}/</span>` +
-        `<span class="sb-count">${r.count}</span>`;
+        `<span class="sb-count">${r.count}</span>` +
+        `<span class="sb-act" data-newsub="${escapeHtml(r.path)}" title="new folder inside">+</span>` +
+        `<span class="sb-act sb-del" data-delfolder="${escapeHtml(r.path)}" title="delete folder">✕</span>`;
     } else {
       const snap = snaps.find(s => s.nid === r.nid);
       b.dataset.nid = r.nid;
-      b.style.paddingLeft = (r.folder ? 31 : 10) + 'px';
       b.innerHTML =
         `<span class="sb-chev"></span>` +
         sidebarIconHtml(snap) +
         `<span class="sb-name">${escapeHtml(fileLabel(r.title, snap))}</span>` +
-        (r.nid === noteId ? '<span class="sb-open">●</span>' : '');
+        (r.nid === noteId ? '<span class="sb-open">●</span>' : '') +
+        `<span class="sb-act" data-rename="${escapeHtml(r.nid)}" title="rename">✎</span>` +
+        `<span class="sb-act sb-del" data-delnote="${escapeHtml(r.nid)}" title="delete note">✕</span>`;
     }
     sidebarTree.appendChild(b);
   });
@@ -2440,6 +2761,16 @@ function attachEvents() {
       if (nid) { e.preventDefault(); switchToTab(nid); return; }
     }
 
+    // Notes autosave into the URL continuously, so ⌘S has nothing to do — but the
+    // reflex is universal, and a browser "Save page as…" dialog is a bad answer.
+    // Flush the pending write and say so.
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      syncNow();
+      flashCopied('saved — every note lives in its URL');
+      return;
+    }
+
     if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
       e.preventDefault();
       toggleSidebar();
@@ -2556,11 +2887,22 @@ function attachEvents() {
 
   // ── Sidebar ──
   sidebarTree.addEventListener('click', (e) => {
+    // Row actions first — they sit inside the row button, so the row's own
+    // click would otherwise swallow them.
+    const del = e.target.closest('[data-delnote]');
+    if (del) { e.stopPropagation(); return deleteNoteFromTree(del.dataset.delnote); }
+    const ren = e.target.closest('[data-rename]');
+    if (ren) { e.stopPropagation(); return startRename(ren.dataset.rename); }
+    const sub = e.target.closest('[data-newsub]');
+    if (sub) { e.stopPropagation(); nextFolderParent = sub.dataset.newsub; return openPalette('newFolder'); }
+    const delf = e.target.closest('[data-delfolder]');
+    if (delf) { e.stopPropagation(); return deleteFolderFromTree(delf.dataset.delfolder); }
+
     const folder = e.target.closest('[data-folder]');
     if (folder) {
-      const name = folder.dataset.folder;
-      if (collapsedFolders.has(name)) collapsedFolders.delete(name);
-      else collapsedFolders.add(name);
+      const path = folder.dataset.folder;
+      if (collapsedFolders.has(path)) collapsedFolders.delete(path);
+      else collapsedFolders.add(path);
       renderSidebar();
       if (emptyVisible) renderRecent();
       return;
@@ -2579,10 +2921,26 @@ function attachEvents() {
 
   paletteBars.addEventListener('input', onSidebarBarInput);
   paletteBars.addEventListener('click', (e) => {
+    if (e.target.closest('[data-upload]')) return pickSidebarImage();
     const sw = e.target.closest('[data-wall]');
     if (!sw) return;
     saveSidebarCfg({ wall: sw.dataset.wall });
     renderSidebarBars(true);          // repaint so the ✓ moves to the new swatch
+  });
+
+  // Arrow keys walk the swatch grid. Without this the grid was mouse-only, while
+  // the rest of the palette is keyboard-first.
+  paletteBars.addEventListener('keydown', (e) => {
+    const sw = e.target.closest('.pal-swatch');
+    if (!sw || !['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) return;
+    const all = [...paletteBars.querySelectorAll('.pal-swatch')];
+    const i = all.indexOf(sw);
+    // Column count from the rendered grid, so wrapping matches what's on screen.
+    const perRow = Math.max(1, Math.round(paletteBars.querySelector('.pal-swatches').clientWidth / sw.offsetWidth));
+    const step = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1
+               : e.key === 'ArrowUp' ? -perRow : perRow;
+    const next = all[Math.min(all.length - 1, Math.max(0, i + step))];
+    if (next) { e.preventDefault(); e.stopPropagation(); next.focus(); }
   });
   // Keys inside a slider are the slider's own; don't let the palette's ↑/↓/Enter
   // navigation steal them while the user is adjusting a bar.
@@ -3191,7 +3549,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl, insertDividerBlocks,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
-    capacityLevel, timeAgo, mergeRecents, groupByFolder, buildTreeRows, stripFormatting,
+    capacityLevel, timeAgo, mergeRecents, groupByFolder, stripTitleMarkup, folderSegments, buildTreeRows, stripFormatting,
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
     langIcon, langBadgeHtml, soleLang, fileLabel, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
