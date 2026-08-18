@@ -2,7 +2,8 @@
   "name": "byebyenotes",
   "version": "1.0.0",
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "migrate": "node scripts/migrate.js"
   },
   "devDependencies": {
     "jest": "^29.0.0",
@@ -10,5 +11,8 @@
   },
   "jest": {
     "testEnvironment": "jsdom"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
   }
 }

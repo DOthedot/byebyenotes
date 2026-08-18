@@ -33,9 +33,37 @@ test('an unknown wallpaper id falls back to none, a known one is kept', () => {
   expect(mod.normalizeSidebarCfg({ wall: known }).wall).toBe(known);
 });
 
-test('position accepts only top/center/bottom', () => {
-  expect(mod.normalizeSidebarCfg({ pos: 'top' }).pos).toBe('top');
-  expect(mod.normalizeSidebarCfg({ pos: 'sideways' }).pos).toBe('center');
+test('panning is two clamped percentages, not a three-stop enum', () => {
+  // Replaced top/center/bottom: a fixed enum could not pan a tall image, which is
+  // the whole point of a portrait wallpaper in a narrow panel.
+  const cfg = mod.normalizeSidebarCfg({ posX: 20, posY: 80 });
+  expect(cfg.posX).toBe(20);
+  expect(cfg.posY).toBe(80);
+  const clamped = mod.normalizeSidebarCfg({ posX: -40, posY: 900 });
+  expect(clamped.posX).toBe(0);
+  expect(clamped.posY).toBe(100);
+  expect(mod.normalizeSidebarCfg({ posX: 'nope' }).posX).toBe(mod.SIDEBAR_DEFAULTS.posX);
+});
+
+test('a custom image is accepted only as a base64 image data URI', () => {
+  // This value reaches a CSS url(); it arrives from localStorage and from other
+  // devices via /api/sync, so anything not self-produced must be rejected.
+  const ok = 'data:image/jpeg;base64,AAAA';
+  expect(mod.normalizeSidebarCfg({ custom: ok }).custom).toBe(ok);
+  for (const bad of [
+    'https://example.com/x.jpg',
+    'data:text/html;base64,PHNjcmlwdD4=',
+    'url(evil)',
+    'data:image/jpeg;base64,<script>',
+    42, null, {},
+  ]) {
+    expect(mod.normalizeSidebarCfg({ custom: bad }).custom).toBe('');
+  }
+});
+
+test('the custom wallpaper id is allowed alongside the built-ins', () => {
+  expect(mod.normalizeSidebarCfg({ wall: 'custom' }).wall).toBe('custom');
+  expect(mod.normalizeSidebarCfg({ wall: 'not-real' }).wall).toBe('none');
 });
 
 test('open is coerced to a boolean', () => {
@@ -43,10 +71,13 @@ test('open is coerced to a boolean', () => {
   expect(mod.normalizeSidebarCfg({ open: 'yes' }).open).toBe(true);
 });
 
-test('SIDEBAR_LOOK_DEFAULTS covers every appearance field but not open', () => {
+test('SIDEBAR_LOOK_DEFAULTS covers appearance only — not open, not the upload', () => {
   expect(mod.SIDEBAR_LOOK_DEFAULTS).not.toHaveProperty('open');
+  // `custom` is excluded too: resetting the look must not throw away an image the
+  // user uploaded, which they'd then have to find and re-pick.
+  expect(mod.SIDEBAR_LOOK_DEFAULTS).not.toHaveProperty('custom');
   expect(Object.keys(mod.SIDEBAR_LOOK_DEFAULTS).sort())
-    .toEqual(['blur', 'bright', 'opacity', 'pos', 'sat', 'scrim', 'wall']);
+    .toEqual(['blur', 'bright', 'opacity', 'posX', 'posY', 'sat', 'scrim', 'wall']);
   Object.entries(mod.SIDEBAR_LOOK_DEFAULTS).forEach(([k, v]) => {
     expect(v).toBe(mod.SIDEBAR_DEFAULTS[k]);
   });
@@ -72,14 +103,14 @@ test('every wallpaper has an id, a name and a css string; none is first', () => 
 });
 
 test('sidebarCssVars emits every custom property as a string', () => {
-  const vars = mod.sidebarCssVars(mod.normalizeSidebarCfg({ opacity: 50, blur: 4, pos: 'top' }));
+  const vars = mod.sidebarCssVars(mod.normalizeSidebarCfg({ opacity: 50, blur: 4 }));
   expect(Object.keys(vars).sort()).toEqual(
     ['--sb-blur', '--sb-bright', '--sb-img', '--sb-opacity', '--sb-pos', '--sb-sat', '--sb-scrim'].sort()
   );
   Object.values(vars).forEach(v => expect(typeof v).toBe('string'));
   expect(vars['--sb-opacity']).toBe('0.5');
   expect(vars['--sb-blur']).toBe('4px');
-  expect(vars['--sb-pos']).toBe('top');
+  expect(vars['--sb-pos']).toBe('50% 50%');
 });
 
 test('sidebarCssVars maps the none wallpaper to the css keyword none', () => {

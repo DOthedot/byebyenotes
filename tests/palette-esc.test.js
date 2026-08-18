@@ -39,3 +39,7 @@ test('newFolder backs out to the create chooser, not all the way to commands', (
   // so a mistyped name is one keystroke from being retried.
   expect(mod.paletteEscTarget('newFolder', false)).toBe('newItem');
 });
+
+test('rename backs out to the command menu', () => {
+  expect(mod.paletteEscTarget('rename', false)).toBe('command');
+});

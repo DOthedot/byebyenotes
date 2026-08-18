@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 15 files, **94 tests** — state 4 · blocks 10 · markdown 19 · sync 5 · home-nav 5 · help 6 · recents 10 · tiny 4 · api-tiny 8 · asset-paths 2 · plus themes/logos/palette-esc/palette-caret/scroll-caret (all green).
+- **Suite:** 23 files, **202 tests** — all green.
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -21,6 +21,10 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 |--------|------|-----|
 | `LZString` | `compressToEncodedURIComponent = btoa`, `decompress… = atob` (null on throw) | Real LZ-String isn't loaded in jsdom; base64 is a good-enough reversible stand-in so `encodeState`/`decodeState` can round-trip. |
 | `hljs` | `highlight: (text) => ({ value: text })` | highlight.js is a CDN dep; the stub returns text unchanged so `buildBlockEl` for code blocks doesn't crash. Only `blocks.test.js` needs it. |
+
+**Exception:** `notes-store.test.js` tests `api/`, not `app.js`. It declares
+`@jest-environment node` in a docblock and needs neither stub — server code has no
+browser globals to fake, and running it under jsdom would only hide that fact.
 
 > **Adding a pure function?** Export it in the `module.exports` block at the bottom of
 > `app.js`, then add a case to the most relevant file below (or a new `*.test.js`).
@@ -301,6 +305,55 @@ root-absolute so they load identically from `/` and `/s/<id>`.
 |------|---------|
 | every local asset reference is root-absolute | No `href`/`src` in `index.html` that is a local file (not `http(s):`/`//`/`data:`/`#`) may be relative. |
 | style.css and app.js use a leading slash | `index.html` references `/style.css` and `/app.js`. |
+
+---
+
+## `notes-store.test.js` — the untrusted-payload boundary (32 tests)
+
+Tests `api/notes-store.js`, the pure half of `/api/sync`. Every value here arrives from
+a browser holding a sync key and is then handed to **another of that user's devices to
+render**, so these cases are about what a hostile or broken payload is allowed to
+become. The bar is: never a constraint violation (which 500s someone's entire sync),
+never markup, never a resurrected note.
+
+| Group | Asserts |
+|------|---------|
+| `normalizeFolder` | Trims and joins like `app.js folderSegments`; collapses `//`; top level is `null` and never `''` (which `notes_folder_shape` rejects); caps depth at 12 — the same cap that stopped `renderSidebar` blowing the stack; rejects over-long paths and non-strings, so `{}` can't become a folder named `[object Object]`. |
+| `sanitizeBlocks` | Unknown block types degrade to `text`; `lang` is slug-only because it becomes a highlight.js **class name**; non-string content becomes `''`, not `"[object Object]"`; a non-array is `null` (matching `notes_blocks_is_array`); oversize is `null` (matching `notes_blocks_size`). |
+| `sanitizeNote` | Unusable `nid` → dropped; missing title → `'untitled'` rather than a NOT NULL violation; title truncated to the same 48 chars `/rename` allows; `titlePinned` is strictly boolean, so a truthy string can't pin a title. |
+| `sanitizeNotes` | One broken note doesn't strand the other twenty-nine; a duplicate `nid` collapses to the last — Postgres refuses to let one upsert touch a row twice, which would fail the whole push; batch is capped. |
+| `sanitizePrefs` | Strips the wallpaper (it has its own column and its own budget); rejects rather than truncates over 32KB — half-written prefs are worse than stale ones; only a plain object qualifies. |
+| `sanitizeImage` | Inline `data:` images only — a remote URL would make every sidebar render fetch a third party; rejects `data:text/html`, `javascript:`, and anything over the column cap. |
+| `rowToNote` | `updated_at_ms` arrives from `pg` as a **string** (bigint) and must become a number, or `mergeRecents` sorts wrong; tombstones are flagged. |
+
+---
+
+## `sync-wire.test.js` — client ⇄ server note mapping (13 tests)
+
+`snapshotToWireNote` / `wireNoteToSnapshot` in `app.js`. The server stores `blocks` and
+has no LZString, so the URL hash is re-derived on the client. That makes these two
+functions the single point where a note can be silently mangled on its way to another
+device — hence the round trip is asserted on **identity**, not field by field.
+
+| Test | Asserts |
+|------|---------|
+| unpacks the hash into blocks | The hash is decoded, not forwarded. |
+| carries the columned fields | `titlePinned`, `folder`, `theme`, `font` survive. |
+| does not send the hash | Storing it too would be a second copy that can disagree. |
+| an undecodable hash is dropped | Pushing it as `blocks: []` would overwrite a good server-side note with nothing — issue #19's failure mode, one layer down. |
+| top level is `null`, not `''` | Maps onto a nullable column. |
+| rebuilt hash decodes to the same state | The re-derivation is lossless. |
+| `titlePinned` ⇄ `renamed` | The two names for one flag stay in step. |
+| re-derives `blockCount` / `langs` | Not trusted from the server. |
+| a malformed row is dropped | Never becomes a blank snapshot. |
+| missing `t` falls back to now | `mergeRecents` must never sort on `NaN`. |
+| round trip is lossless | `snapshot → wire → snapshot` is `toEqual` the original. |
+| an empty note survives | Doesn't collapse to `null`. |
+| the merge key survives | `mergeRecents` still dedupes across the trip. |
+
+> **Note:** the database half — auth, upserts, tombstones, the no-op guard — is not in
+> this suite. It needs a real Postgres, and is verified by driving the deployed
+> endpoint. See `api/README.md`.
 
 ---
 

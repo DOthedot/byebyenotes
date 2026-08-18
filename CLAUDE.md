@@ -8,8 +8,11 @@ When guidance here and in `AGENTS.md` overlap, `AGENTS.md` is the source of trut
 
 A terminal-aesthetic, block-based notepad where **the whole note lives in the URL**.
 No accounts, no notes database. State is compressed with LZ-String into
-`location.hash`. Optional cross-device sync and pasted-image hosting use a Vercel KV
-(Upstash Redis) store, but the app is 100% functional with **zero backend**.
+`location.hash`. Signed out, the app is 100% functional with **zero backend**.
+
+Turn on `/sync` and a **Postgres** database becomes the source of truth for your notes,
+folders and prefs (`api/sync.js`); pasted images still use a Vercel KV store. Neither
+is required to use the app.
 
 - **No build step.** Plain HTML/CSS/JS + CDN `<script>` tags. Do **not** add a
   bundler, framework, transpiler, or npm runtime dependency.
@@ -20,8 +23,11 @@ No accounts, no notes database. State is compressed with LZ-String into
   saved snapshot; switching tabs saves the current note, then loads the other's hash.
 - **The sidebar and the tabline are views onto `bbn.recent`**, the same localStorage
   snapshot list the home screen renders. They add no new store.
-- **Deploy = push to `main`** → Vercel auto-deploys `byebyenotes.vercel.app`
-  (`github.com/DOthedot/byebyenotes`). Commit/push only when the user asks.
+- **Deploy = push to `main`.** The deployment that owns the database owns the app:
+  `/api/sync` needs `DATABASE_URL` + `SYNC_PEPPER`, which is Railway (`server.js` +
+  `Dockerfile`). Commit/push only when the user asks.
+- **Schema changes are a separate step.** `npm run migrate` — never on container boot,
+  which races itself the moment there is more than one replica.
 
 ## Where things live
 
@@ -30,7 +36,9 @@ No accounts, no notes database. State is compressed with LZ-String into
 | `index.html` | Static DOM shell (empty-state, app shell + sidebar + tabline, status bar, palette, share panel, FAB) and the inline pre-paint script that restores the sidebar's open/closed state. | — |
 | `app.js` | **All** app logic (~3100 lines, one file on purpose). | `AGENTS.md` |
 | `style.css` | All styles + the 13 theme variable blocks. | — |
-| `api/` | Vercel serverless functions (`sync.js`, `img.js`). | [`api/README.md`](./api/README.md) |
+| `api/` | Server endpoints — `sync.js` (Postgres), `db.js`, `auth.js`, `notes-store.js`, `img.js` (KV). | [`api/README.md`](./api/README.md) |
+| `migrations/` | Postgres schema, applied in filename order by `npm run migrate`. | — |
+| `server.js` | Node front door for Railway/VPS. **Owns `/api/sync`** — Vercel has no route to the database. | — |
 | `tests/` | Jest (jsdom) unit tests for the **pure** functions. | [`tests/INDEX.md`](./tests/INDEX.md) |
 | `docs/` | Specs, plans, and mocks. | [`docs/README.md`](./docs/README.md) |
 | `assets/` | Wallpaper images for the sidebar background picker. | — |
