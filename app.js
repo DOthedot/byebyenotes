@@ -1077,7 +1077,7 @@ function openPalette(mode, opts = {}) {
   // it here rather than let it misfile whatever note is created next. This is the
   // third bug from this one global; sweeping at every hop closes the class.
   if (mode !== 'filename' && mode !== 'newFolder') nextNoteFolder = null;
-  if (mode !== 'newFolder') nextFolderParent = null;
+  if (mode !== 'newFolder' && mode !== 'newItem') nextFolderParent = null;
   if (mode !== 'rename') renameTarget = null;
 
   paletteMode  = mode;
@@ -1147,7 +1147,7 @@ function openPalette(mode, opts = {}) {
       ...folders.map(f => ({ id: f, label: f + '/', ico: '▸' })),
     ];
   } else if (mode === 'newItem') {
-    paletteTitle.textContent = 'CREATE';
+    paletteTitle.textContent = nextFolderParent ? `CREATE IN ${nextFolderParent}/` : 'CREATE';
     paletteItems = [
       { id: 'ni-note',   label: 'new note',   ico: '✚', desc: 'a blank note in the tree' },
       { id: 'ni-folder', label: 'new folder', ico: '▸', desc: 'name it, and start a note inside' },
@@ -1232,6 +1232,9 @@ function renderPaletteList(items) {
   selectCurrentOnce = false;
   paletteIndex = Math.min(paletteIndex, Math.max(0, items.length - 1));
   paletteList.innerHTML = '';
+  const helpMode = paletteMode === 'help';
+  paletteList.classList.toggle('help-grid', helpMode);
+
   items.forEach((item, i) => {
     const li = document.createElement('li');
 
@@ -1239,6 +1242,42 @@ function renderPaletteList(items) {
     if (item.heading) {
       li.className = 'cmd-section';
       li.textContent = item.heading;
+      paletteList.appendChild(li);
+      return;
+    }
+
+    // /help is a reference sheet, not a command list: the mock leads each row with
+    // its keycap and puts the explanation beside it. Reusing the command layout
+    // pushed the key to the far right, which reads as a hint rather than the subject.
+    if (helpMode) {
+      li.className = 'help-row';
+      const keys = document.createElement('span');
+      keys.className = 'help-keys';
+      const addKey = (t) => { const kb = document.createElement('kbd'); kb.textContent = t; keys.appendChild(kb); };
+
+      // A command IS its own key here: the mock showed "/ settings", two chips, not
+      // a row labelled "/settings" with an empty key column. Only the SHORTCUTS
+      // section carries an explicit kbd, so derive the rest from the label.
+      let text = item.desc || '';
+      if (item.kbd) {
+        String(item.kbd).split(/\s+/).filter(Boolean).forEach(addKey);
+        text = item.label + (item.desc ? ' — ' + item.desc : '');
+      } else if (/^\//.test(item.label || '')) {
+        addKey('/');
+        const name = item.label.slice(1);
+        if (name) addKey(name);
+      } else {
+        text = item.label + (item.desc ? ' — ' + item.desc : '');
+      }
+      // A prose row (the intro) has no key of its own — don't reserve the key
+      // column for it, or it reads as a row whose shortcut went missing.
+      if (!keys.childNodes.length) li.classList.add('help-prose');
+      else li.appendChild(keys);
+
+      const textEl = document.createElement('span');
+      textEl.className = 'help-text';
+      textEl.textContent = text;
+      li.appendChild(textEl);
       paletteList.appendChild(li);
       return;
     }
@@ -1544,7 +1583,13 @@ function confirmPalette() {
   }
 
   if (paletteMode === 'newItem') {
-    if (selected.id === 'ni-note')   { closePalette(); startNewNote(); return; }
+    if (selected.id === 'ni-note') {
+      const parent = nextFolderParent;
+      closePalette();                 // clears both pending values, so set after
+      if (parent) nextNoteFolder = parent;
+      startNewNote();
+      return;
+    }
     if (selected.id === 'ni-folder') { openPalette('newFolder'); return; }
     closePalette();
     return;
@@ -2181,6 +2226,11 @@ const SB_BADGE = {
   css:        ['CSS', '--sb-css'],  json:   ['{}', '--sb-json'], bash: ['SH', '--sb-sh'],
   sql:        ['SQL', '--sb-sql'],  java:   ['JV', '--sb-java'], cpp:  ['C+', '--sb-cpp'],
 };
+// The mock's nvim-tree folder glyph. Inline SVG (our own constant markup) so it
+// takes the accent colour like the folder name beside it.
+const FOLDER_SVG_OPEN   = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1.5 3.2c0-.6.5-1.1 1.1-1.1h3.1c.4 0 .7.2.9.5l.6.9h6.2c.6 0 1.1.5 1.1 1.1v7.2c0 .6-.5 1.1-1.1 1.1H2.6c-.6 0-1.1-.5-1.1-1.1V3.2z"/></svg>';
+const FOLDER_SVG_CLOSED = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.9 3.4c0-.5.4-.9.9-.9h2.8c.3 0 .6.2.8.4l.6.9h6c.5 0 .9.4.9.9v6.9c0 .5-.4.9-.9.9H2.8c-.5 0-.9-.4-.9-.9V3.4z"/></svg>';
+
 const SB_EXT = {
   javascript: 'js', python: 'py', html: 'html', css: 'css', json: 'json',
   bash: 'sh', sql: 'sql', java: 'java', cpp: 'cpp',
@@ -2409,6 +2459,7 @@ function renderSidebar() {
       b.dataset.folder = r.path;
       b.innerHTML =
         `<span class="sb-chev">${r.folded ? '▸' : '▾'}</span>` +
+        `<span class="sb-folder">${r.folded ? FOLDER_SVG_CLOSED : FOLDER_SVG_OPEN}</span>` +
         `<span class="sb-name">${escapeHtml(r.name)}/</span>` +
         `<span class="sb-count">${r.count}</span>` +
         `<span class="sb-act" data-newsub="${escapeHtml(r.path)}" title="new folder inside">+</span>` +
@@ -2416,6 +2467,7 @@ function renderSidebar() {
     } else {
       const snap = snaps.find(s => s.nid === r.nid);
       b.dataset.nid = r.nid;
+      b.draggable = true;             // drag onto a folder row to file it
       b.innerHTML =
         `<span class="sb-chev"></span>` +
         sidebarIconHtml(snap) +
@@ -2886,6 +2938,54 @@ function attachEvents() {
   exampleLink.addEventListener('click', () => dissolveEmptyState());
 
   // ── Sidebar ──
+  // ── Drag a note onto a folder ────────────────────────────────────────────
+  // Filing a note previously meant the move-to-folder palette; dragging is the
+  // gesture people reach for in a file tree.
+  let dragNid = null;
+
+  sidebarTree.addEventListener('dragstart', (e) => {
+    const row = e.target.closest('[data-nid]');
+    if (!row) return;
+    dragNid = row.dataset.nid;
+    e.dataTransfer.effectAllowed = 'move';
+    // Some browsers refuse to start a drag without payload, even if we never read it.
+    try { e.dataTransfer.setData('text/plain', dragNid); } catch (err) {}
+    row.classList.add('dragging');
+  });
+
+  sidebarTree.addEventListener('dragend', () => {
+    dragNid = null;
+    sidebarTree.querySelectorAll('.dragging, .drop-into')
+      .forEach(el => el.classList.remove('dragging', 'drop-into'));
+  });
+
+  sidebarTree.addEventListener('dragover', (e) => {
+    if (!dragNid) return;
+    const folder = e.target.closest('[data-folder]');
+    e.preventDefault();                       // required, or drop never fires
+    e.dataTransfer.dropEffect = 'move';
+    sidebarTree.querySelectorAll('.drop-into').forEach(el => el.classList.remove('drop-into'));
+    if (folder) folder.classList.add('drop-into');
+  });
+
+  sidebarTree.addEventListener('drop', (e) => {
+    if (!dragNid) return;
+    e.preventDefault();
+    const folder = e.target.closest('[data-folder]');
+    // Dropping on empty tree space unfiles the note — the way out of a folder.
+    const target = folder ? folder.dataset.folder : null;
+    const snap = loadSnapshots().find(x => x.nid === dragNid);
+    const from = folderSegments(snap && snap.folder).join('/') || null;
+    const to   = target ? folderSegments(target).join('/') : null;
+    dragNid = null;
+    sidebarTree.querySelectorAll('.dragging, .drop-into')
+      .forEach(el => el.classList.remove('dragging', 'drop-into'));
+    if (from === to) return;                  // nothing to do, don't churn storage
+    assignFolder(snap.nid, to);
+    renderSidebar(); renderTabline();
+    flashCopied(to ? `moved to ${to}/` : 'moved to the top level');
+  });
+
   sidebarTree.addEventListener('click', (e) => {
     // Row actions first — they sit inside the row button, so the row's own
     // click would otherwise swallow them.
@@ -2894,7 +2994,14 @@ function attachEvents() {
     const ren = e.target.closest('[data-rename]');
     if (ren) { e.stopPropagation(); return startRename(ren.dataset.rename); }
     const sub = e.target.closest('[data-newsub]');
-    if (sub) { e.stopPropagation(); nextFolderParent = sub.dataset.newsub; return openPalette('newFolder'); }
+    if (sub) {
+      // Ask note-or-folder, same as the header +, but scoped to this folder. It
+      // used to jump straight to the folder prompt, so there was no way to make a
+      // note inside a folder from the tree at all.
+      e.stopPropagation();
+      nextFolderParent = sub.dataset.newsub;
+      return openPalette('newItem');
+    }
     const delf = e.target.closest('[data-delfolder]');
     if (delf) { e.stopPropagation(); return deleteFolderFromTree(delf.dataset.delfolder); }
 

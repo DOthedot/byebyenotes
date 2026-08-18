@@ -1510,3 +1510,47 @@ body.focus-mode .blk-lines { display: none; }
 }
 .pal-upload:hover { color: var(--accent); border-color: var(--accent); }
 .pal-upload span { position: static; background: none; padding: 0; }
+
+/* ── Folder glyph in the tree ────────────────────────────────────────────────
+   The mock led every folder with an nvim-tree folder icon; a bare chevron made
+   folders read as just another indented row. Filled when open, outlined when
+   collapsed, so the state is legible without reading the chevron. */
+.sb-folder {
+  width: 15px; height: 15px; flex: 0 0 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--accent);
+}
+.sb-folder svg { width: 14px; height: 14px; display: block; }
+
+/* ── /help as a reference sheet, not a command list ──────────────────────────
+   Keycaps lead each row and share a column, so the eye scans keys down the left
+   and meanings down the right — the mock's layout. */
+#palette-list.help-grid .help-row {
+  display: flex; align-items: baseline; gap: 14px;
+  padding: 5px 13px; cursor: default; background: none;
+}
+#palette-list.help-grid .help-keys {
+  flex: 0 0 132px; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-start;
+}
+#palette-list.help-grid .help-keys kbd {
+  background: var(--bg-code); color: var(--accent);
+  border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px;
+  padding: 1px 6px; font: inherit; font-size: 11px; line-height: 1.5;
+}
+#palette-list.help-grid .help-text { color: var(--fg-dim); font-size: 12.5px; }
+/* Read-only: no row highlight to imply something will happen on Enter. */
+#palette-list.help-grid .help-row:hover { background: none; }
+
+/* ── Drag a note onto a folder ───────────────────────────────────────────── */
+.sb-row[draggable="true"] { cursor: grab; }
+.sb-row.dragging { opacity: .45; }
+/* The drop target is the folder itself, so highlight the row rather than a line
+   between rows — this reorders nothing, it only re-files. */
+.sb-row.dir.drop-into {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 var(--accent);
+}
+/* A help row with no key of its own spans the full width instead of leaving an
+   empty keycap column beside it. */
+#palette-list.help-grid .help-row.help-prose { padding-left: 13px; }
+#palette-list.help-grid .help-row.help-prose .help-text { color: var(--fg); }
