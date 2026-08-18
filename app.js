@@ -95,6 +95,17 @@ const QR_MAX_CHARS   = 2800;   // QR version 40, level L, 8-bit capacity ≈ 295
 const SNAP_KEY       = 'bbn.recent';
 const PREFS_KEY      = 'bbn.prefs';
 const SYNC_KEY_LS    = 'bbn.syncKey';
+// Sync intentions that localStorage alone cannot express.
+//
+// Deleting a note used to mean simply dropping it from bbn.recent. Absence carries no
+// timestamp, so the next pull from another device — which still had the note — read
+// that absence as "nothing to say" and put it straight back.
+//
+// Creation needs the same treatment for the opposite reason: pushing the whole folder
+// list on every autosave would re-create a folder another device had just deleted,
+// because the server cannot tell "I still have this" from "I meant to make this".
+// Only deliberate acts go in here, and they are cleared once the server has them.
+const PENDING_KEY    = 'bbn.pending';
 const SNAP_MAX       = 30;
 
 // Sidebar background presets. Generated CSS art, not photographs: byebyenotes has
@@ -185,6 +196,9 @@ let nextNoteFolder = null;  // folder name typed in the /newFolder prompt
 let pendingFolder  = null;  // { nid, folder } — bound to a specific note, never "the next save"
 const lineNumbersOn = true;  // vim gutter — always on; kept as one named seam to disable it
 let openTabs = [];          // [nid] of notes in the tabline; the active one is noteId
+// The sidebar wallpaper is up to 120KB of base64 and changes about twice a year,
+// while pushNow runs every couple of seconds. Only ship it when it moved.
+let sidebarImageDirty = false;
 
 // ── State encode / decode ─────────────────────────────────────────────────────
 function encodeState(state) {
@@ -292,6 +306,14 @@ function stripTitleMarkup(line) {
     .trim();
 }
 
+// Truncates by code point. `String.prototype.slice` counts UTF-16 units, so cutting a
+// title at 48 can land between the halves of an emoji — and the resulting lone
+// surrogate is not valid JSON to Postgres, which rejects the whole sync push.
+function truncateTitle(str, max) {
+  const cps = Array.from(String(str == null ? '' : str));
+  return cps.length <= max ? String(str == null ? '' : str) : cps.slice(0, max).join('');
+}
+
 function noteTitle(blockList) {
   for (const b of blockList || []) {
     const lines = (b.content || '').split('\n');
@@ -301,7 +323,7 @@ function noteTitle(blockList) {
       const cleaned = stripTitleMarkup(raw);
       // A line that was pure markup cleans down to nothing — keep looking rather
       // than titling the note with an empty string.
-      if (cleaned) return cleaned.slice(0, 48);
+      if (cleaned) return truncateTitle(cleaned, 48);
     }
   }
   return 'untitled';
@@ -495,7 +517,12 @@ function applySidebarCfg(cfg) {
 // the write side of the same prefs blob theme/font already round-trip through.
 function saveSidebarCfg(patch) {
   const prefs = loadPrefs();
-  const cfg = normalizeSidebarCfg(Object.assign(normalizeSidebarCfg(prefs.sidebar), patch));
+  const before = normalizeSidebarCfg(prefs.sidebar);
+  const cfg = normalizeSidebarCfg(Object.assign(before, patch));
+  // Compared rather than inferred from `patch`: clearing a custom image and
+  // re-picking the same one both need to reach the server, and neither is visible
+  // from the patch keys alone.
+  if (cfg.custom !== before.custom) sidebarImageDirty = true;
   prefs.sidebar = cfg;
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { t: Date.now() }))); } catch (e) {}
   applySidebarCfg(cfg);
@@ -522,6 +549,7 @@ function deleteSnapshot(nid) {
   try {
     localStorage.setItem(SNAP_KEY, JSON.stringify(loadSnapshots().filter(s => s.nid !== nid)));
   } catch (e) {}
+  addPending('deletedNotes', nid);   // otherwise the next pull from another device restores it
   schedulePush();
   renderRecent();
   renderSidebar();
@@ -537,6 +565,84 @@ function mergeRecents(a, b) {
     if (!cur || (s.t || 0) > (cur.t || 0)) byNid.set(s.nid, s);
   });
   return [...byNid.values()].sort((x, y) => (y.t || 0) - (x.t || 0)).slice(0, SNAP_MAX);
+}
+
+// ── Deletion tombstones ───────────────────────────────────────────────────────
+const PENDING_KINDS = ['deletedNotes', 'deletedFolders', 'newFolders'];
+
+function loadPending() {
+  const empty = { deletedNotes: [], deletedFolders: [], newFolders: [] };
+  try {
+    const raw = JSON.parse(localStorage.getItem(PENDING_KEY)) || {};
+    PENDING_KINDS.forEach(k => { if (Array.isArray(raw[k])) empty[k] = raw[k]; });
+    return empty;
+  } catch (e) {
+    return empty;
+  }
+}
+
+// Creating and deleting the same path are mutually exclusive intentions, so recording
+// one clears the other. Without that, a folder deleted and re-made before the next
+// push would arrive as both, and which won would depend on statement order.
+const PENDING_OPPOSITE = { newFolders: 'deletedFolders', deletedFolders: 'newFolders' };
+
+function addPending(kind, id) {
+  if (!id) return;
+  try {
+    const pending = loadPending();
+    if (!pending[kind].includes(id)) pending[kind].push(id);
+    const opposite = PENDING_OPPOSITE[kind];
+    if (opposite) pending[opposite] = pending[opposite].filter(x => x !== id);
+    localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+  } catch (e) { /* storage unavailable — the change stays local-only */ }
+}
+
+// Drops exactly the ids the server confirmed. Anything recorded between the push
+// starting and this running is left alone, so an intention cannot be lost to the race.
+function clearPending(applied) {
+  try {
+    const pending = loadPending();
+    PENDING_KINDS.forEach(k => {
+      pending[k] = pending[k].filter(id => !(applied[k] || []).includes(id));
+    });
+    localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+  } catch (e) { /* fine */ }
+}
+
+// ── Snapshot ⇄ server row ─────────────────────────────────────────────────────
+// The server stores blocks, not the LZ-String hash. The hash is a URL
+// serialization of exactly that state, so keeping both would mean two copies of a
+// note that can disagree — and the one in the URL is the one that can be stale.
+// These two functions are the whole translation, and they are pure so the round
+// trip can be tested without a network.
+function snapshotToWireNote(snap) {
+  if (!snap || !snap.nid) return null;
+  const state = decodeState(snap.hash || '');
+  if (!state || !Array.isArray(state.blocks)) return null;   // unopenable — nothing to store
+  return {
+    nid:         snap.nid,
+    blocks:      state.blocks,
+    title:       snap.title || 'untitled',
+    titlePinned: !!snap.renamed,
+    folder:      snap.folder || null,
+    theme:       state.theme || null,
+    font:        state.font || null,
+  };
+}
+
+function wireNoteToSnapshot(n) {
+  if (!n || !n.nid || !Array.isArray(n.blocks)) return null;
+  return {
+    nid:    n.nid,
+    // Re-derived here rather than sent by the server, which has no LZString.
+    hash:   encodeState({ nid: n.nid, blocks: n.blocks, theme: n.theme, font: n.font }),
+    title:  n.title || 'untitled',
+    renamed: !!n.titlePinned,
+    folder: n.folder || null,
+    blockCount: n.blocks.length,
+    langs:  [...new Set(n.blocks.filter(b => b && b.lang).map(b => b.lang))],
+    t:      Number(n.t) || Date.now(),
+  };
 }
 
 // ── Theme/font preferences (localStorage + optional sync) ─────────────────────
@@ -569,13 +675,66 @@ async function syncPull() {
   if (!res.ok) throw new Error('pull failed');
   const { data } = await res.json();
   if (!data) return;
-  // Remote recents bypass saveSnapshot's openability guard, so a legacy/dead entry can
+
+  // Server tombstones are applied FIRST, so a note deleted elsewhere is gone from
+  // this device before the merge below could re-adopt it from our own list.
+  const gone = new Set((data.deletedNotes || []).map(n => n.nid));
+  const remote = (data.notes || []).map(wireNoteToSnapshot).filter(Boolean);
+  // Remote entries bypass saveSnapshot's openability guard, so a legacy/dead entry can
   // still land here — the click-time guard in makeRecentRow catches those regardless.
-  const merged = mergeRecents(loadSnapshots(), data.recents || []);
+  const merged = mergeRecents(loadSnapshots(), remote).filter(s => !gone.has(s.nid));
   try { localStorage.setItem(SNAP_KEY, JSON.stringify(merged)); } catch (e) {}
+
+  // A note open in a tab that was deleted on another device would otherwise keep
+  // its tab, pointing at a snapshot that no longer exists.
+  const activeWasDeleted = gone.has(noteId);
+  if (gone.size) openTabs = openTabs.filter(nid => !gone.has(nid));
+
+  if (activeWasDeleted) {
+    // The note on screen was deleted elsewhere. pruneTabs deliberately keeps the
+    // active tab alive whether or not its snapshot exists, so without this the note
+    // would sit there looking normal while the server's upsert — which refuses
+    // tombstoned rows — silently discarded every further edit, with pushNow still
+    // reporting success. Re-keying to a fresh id keeps what's on screen and lets it
+    // save as a new note, which loses nothing and needs no decision from the user.
+    noteId = Math.random().toString(36).slice(2, 10);
+    ensureActiveTab();
+    syncNow();
+    flashCopied('deleted on another device — kept here as a new note');
+  } else if (gone.size) {
+    pruneTabs();
+  }
+
+  // Folders are their own rows now, each with its own timestamp and its own
+  // deleted_at, so they are applied unconditionally. Folding them into the prefs
+  // blob below would put them behind that blob's `t` — and a folder deleted on the
+  // phone would then survive here for as long as this device's prefs were newer.
+  if (Array.isArray(data.folders)) {
+    const live = data.folders.filter(f => f && !f.deleted).map(f => f.path);
+    const dead = new Set(data.folders.filter(f => f && f.deleted).map(f => f.path));
+    // Union rather than replace: a folder made offline on this device has no row
+    // yet, and replacing outright would delete it before it was ever pushed.
+    const keep = [...new Set([...loadFolders().filter(f => !dead.has(f)), ...live])].sort();
+    try {
+      const prefs = loadPrefs();
+      prefs.folders = keep;
+      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch (e) { /* storage unavailable */ }
+    collapsedFolders.forEach(f => { if (dead.has(f)) collapsedFolders.delete(f); });
+  }
+
   // Adopt remote prefs only when they're newer than what this device has
   const localPrefs = loadPrefs();
   if (data.prefs && (data.prefs.t || 0) > (localPrefs.t || 0)) {
+    // The wallpaper travels in its own field — it is up to 120KB and has no
+    // business inside a blob rewritten on every theme change. Put it back where
+    // normalizeSidebarCfg expects to find it before anything reads prefs.
+    const incoming = Object.assign({}, data.prefs, { folders: loadFolders() });
+    if (data.sidebarImage) {
+      const sb = (incoming.sidebar && typeof incoming.sidebar === 'object') ? incoming.sidebar : {};
+      incoming.sidebar = Object.assign({}, sb, { custom: data.sidebarImage });
+    }
+    data.prefs = incoming;
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(data.prefs)); } catch (e) {}
     // Your chosen theme/font are *yours*, not the note's: loadState already lets
     // your prefs win for any note in your own recents. Gating this on an empty
@@ -596,19 +755,54 @@ async function syncPull() {
 function pushNow() {
   if (!syncKey) return;
   clearTimeout(pushTimer);
+
+  const prefs = loadPrefs();
+  const pending = loadPending();
+  const body = {
+    notes:          loadSnapshots().map(snapshotToWireNote).filter(Boolean),
+    // Deliberate creations only. Notes can safely be re-sent in full because their
+    // upsert refuses tombstoned rows server-side; the folders upsert deliberately
+    // *un*-deletes, so sending the whole list here would resurrect deleted folders.
+    folders:        pending.newFolders,
+    deletedNotes:   pending.deletedNotes,
+    deletedFolders: pending.deletedFolders,
+    prefs,
+  };
+
+  // The wallpaper is only sent when it actually changed. Omitting the key tells the
+  // server to leave the stored image alone — otherwise every two-second autosave
+  // would ship 120KB of base64 that nobody asked for.
+  if (sidebarImageDirty) {
+    body.sidebarImage = (prefs.sidebar && prefs.sidebar.custom) || null;
+    sidebarImageDirty = false;
+  }
+
   fetch('/api/sync', {
     method: 'PUT',
     keepalive: true,   // survives tab close mid-request
     headers: { 'x-sync-key': syncKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ recents: loadSnapshots(), prefs: loadPrefs() }),
+    body: JSON.stringify(body),
   }).then(res => {
     // A rejected PUT used to vanish into .catch(() => {}), so sync could be dead
-    // for hours without a sign. 413 is the one a user can actually act on.
-    if (res.ok) return;
-    flashCopied(res.status === 413
-      ? "sync failed — too much saved. remove a background image or some notes."
-      : `sync failed (${res.status})`);
-  }).catch(() => flashCopied('sync failed — server unreachable'));
+    // for hours without a sign.
+    if (!res.ok) {
+      // Put the image back on the queue: the server never received it.
+      if (body.sidebarImage !== undefined) sidebarImageDirty = true;
+      flashCopied(res.status === 403
+        ? 'sync failed — that passphrase belongs to a different account'
+        : `sync failed (${res.status})`);
+      return;
+    }
+    // Only now are these durable somewhere other than this browser.
+    clearPending({
+      deletedNotes:   body.deletedNotes,
+      deletedFolders: body.deletedFolders,
+      newFolders:     body.folders,
+    });
+  }).catch(() => {
+    if (body.sidebarImage !== undefined) sidebarImageDirty = true;
+    flashCopied('sync failed — server unreachable');
+  });
 }
 
 function schedulePush() {
@@ -622,7 +816,15 @@ async function enableSync(phrase) {
     syncKey = await derivePassKey(phrase);
     localStorage.setItem(SYNC_KEY_LS, syncKey);
     flashCopied('sync: connecting…');
+    // Pull FIRST, then claim. Turning sync on is the deliberate act for the folders
+    // already on this device, but "already on this device" is only meaningful after
+    // the server has had its say: sync may have been off here while another device
+    // deleted a shared folder, and seeding from the pre-pull list would push that
+    // folder straight back — the very un-delete `bbn.pending` exists to prevent.
+    // syncPull strips server-tombstoned paths out of prefs.folders, so reading
+    // loadFolders() afterwards claims local-only folders without reviving dead ones.
     await syncPull();
+    loadFolders().forEach(f => addPending('newFolders', f));
     schedulePush();
     flashCopied('sync on ✓');
   } catch (e) {
@@ -2171,8 +2373,9 @@ function pickSidebarImage() {
         }
         // Re-encoding through a canvas is also the sanitiser: whatever the file
         // contained, what we store is pixels we drew ourselves.
-        // Well under api/sync.js's 400KB cap for the ENTIRE prefs+recents payload —
-        // the image is one field in that blob, not the whole budget.
+        // The image has its own column and its own budget now (user_prefs_image_size,
+        // 200KB) rather than competing with notes for one shared payload — but keep
+        // the client cap well under it, since this is a background, not the content.
         if (data.length > 120000) return flashCopied('image too detailed to store — try a simpler one');
         saveSidebarCfg({ custom: data, wall: 'custom' });
         renderSidebarBars(true);
@@ -2205,6 +2408,10 @@ function saveFolders(list) {
 function addFolder(path) {
   const clean = folderSegments(path).join('/');
   if (!clean) return null;
+  // Recorded as a deliberate creation. pushNow sends only these, never the whole
+  // local list — sending the list would revive folders another device just deleted,
+  // since the server cannot tell "I still have this" from "I meant to make this".
+  addPending('newFolders', clean);
   saveFolders([...loadFolders(), clean]);
   collapsedFolders.delete(clean);   // a folder you just made should be open
   renderSidebar();
@@ -2215,7 +2422,9 @@ function addFolder(path) {
 // never deleted — losing notes to a mis-click on a folder would be far worse.
 function removeFolder(path) {
   const clean = folderSegments(path).join('/');
-  saveFolders(loadFolders().filter(f => f !== clean && !f.startsWith(clean + '/')));
+  const dropped = loadFolders().filter(f => f === clean || f.startsWith(clean + '/'));
+  dropped.forEach(f => addPending('deletedFolders', f));
+  saveFolders(loadFolders().filter(f => !dropped.includes(f)));
 }
 
 // ── Sidebar row presentation ─────────────────────────────────────────────────
@@ -2425,7 +2634,7 @@ function applyRename(nid, title) {
     if (s) {
       const t = (title || '').trim();
       if (t) {
-        s.title = t.slice(0, 48);
+        s.title = truncateTitle(t, 48);
         s.renamed = true;
       } else {
         // Clearing the name goes back to deriving from the note's own content.
@@ -2975,11 +3184,14 @@ function attachEvents() {
     // Dropping on empty tree space unfiles the note — the way out of a folder.
     const target = folder ? folder.dataset.folder : null;
     const snap = loadSnapshots().find(x => x.nid === dragNid);
-    const from = folderSegments(snap && snap.folder).join('/') || null;
-    const to   = target ? folderSegments(target).join('/') : null;
+    // Clear the drag state before any early return, or a row that was dropped on
+    // nothing keeps its .dragging highlight until the next full re-render.
     dragNid = null;
     sidebarTree.querySelectorAll('.dragging, .drop-into')
       .forEach(el => el.classList.remove('dragging', 'drop-into'));
+    if (!snap) return;                        // deleted mid-drag, in another tab or by a pull
+    const from = folderSegments(snap.folder).join('/') || null;
+    const to   = target ? folderSegments(target).join('/') : null;
     if (from === to) return;                  // nothing to do, don't churn storage
     assignFolder(snap.nid, to);
     renderSidebar(); renderTabline();
@@ -3656,12 +3868,13 @@ if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl, insertDividerBlocks,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
-    capacityLevel, timeAgo, mergeRecents, groupByFolder, stripTitleMarkup, folderSegments, buildTreeRows, stripFormatting,
+    capacityLevel, timeAgo, mergeRecents, truncateTitle, groupByFolder, stripTitleMarkup, folderSegments, buildTreeRows, stripFormatting,
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
     langIcon, langBadgeHtml, soleLang, fileLabel, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
     normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS,
     filterPaletteItems,
+    snapshotToWireNote, wireNoteToSnapshot,
   };
 }

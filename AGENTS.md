@@ -6,8 +6,11 @@ Guidance for AI agents (and humans) contributing to this repo. Read this before 
 
 A terminal-aesthetic, block-based notepad where **the entire note lives in the URL**.
 No accounts, no database for notes. State is compressed with LZ-String into
-`location.hash`. Optional cross-device sync and pasted-image hosting use a Vercel KV
-(Upstash Redis) store, but the app is fully functional with zero backend.
+`location.hash`. Signed out, the app is fully functional with zero backend.
+
+With `/sync` on, **Postgres is the source of truth** for notes, folders and prefs —
+the hash becomes a share/export serialization rather than storage. Pasted images
+still use a Vercel KV store.
 
 - **No build step.** Plain HTML/CSS/JS. Do not add a bundler, framework, or transpiler.
 - **Deploy = push to `main`.** Vercel auto-deploys to `byebyenotes.vercel.app`
@@ -20,7 +23,10 @@ No accounts, no database for notes. State is compressed with LZ-String into
 | `index.html` | Static DOM shell: empty-state, `#app-shell` (sidebar + `#main-col` → tabline + document), status bar, palette, share panel, FAB. CDN `<script>` tags, plus one inline pre-paint script (see Gotcha 7). |
 | `app.js` | **All** application logic (~3100 lines, intentionally one file). |
 | `style.css` | All styles + the 13 theme variable blocks. |
-| `api/sync.js` | Serverless fn: recent-notes + prefs sync, keyed by `SHA-256(passphrase)`. |
+| `api/sync.js` | Notes, folders and prefs as Postgres rows. Auth by `SHA-256(passphrase)`. |
+| `api/db.js` | The `pg` pool. Prefers `DATABASE_URL` (Railway-internal) over `DATABASE_PUBLIC_URL`. |
+| `api/auth.js` | sync key → `users.id`. HMAC lookup + scrypt verifier, cached 10 min. |
+| `api/notes-store.js` | Pure: the untrusted-payload boundary. Everything testable about sync lives here. |
 | `api/img.js` | Serverless fn: store/serve pasted images (client compresses first). |
 | `tests/*.test.js` | Jest (jsdom) unit tests for the **pure** functions. |
 | `assets/*.jpg` | Wallpaper images offered by the `/settings` sidebar background picker. |

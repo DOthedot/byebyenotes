@@ -4,6 +4,10 @@
 //   1. static hosting + the SPA rewrite in vercel.json
 //   2. an enhanced req/res for api/*.js — req.query, req.body, res.status().json()
 //
+// Since api/sync.js moved to Postgres this is no longer just an alternative front
+// door: it is the front door. Vercel has no route to the Railway private network,
+// so the deployment that owns the database owns the app.
+//
 // This file supplies both, with **no runtime dependencies**, so `api/*.js` stay
 // byte-identical and keep working on Vercel unchanged. Deploying here does not
 // fork the app; it's the same files behind a different front door.
@@ -147,10 +151,17 @@ const server = http.createServer(async (req, res) => {
   const pathname = normalizePath(parsed.pathname || '/');
   if (pathname === null) { res.statusCode = 400; return res.end('bad path'); }
 
-  // Railway/Fly health checks — cheap, and never touches KV.
+  // Railway/Fly health checks. Reports whether the backing stores are CONFIGURED,
+  // deliberately without querying them: a health check that pings Postgres turns a
+  // ten-second database blip into a container restart loop.
   if (pathname === '/healthz') {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    return res.end(JSON.stringify({ ok: true, kv: Boolean(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL) }));
+    return res.end(JSON.stringify({
+      ok: true,
+      db: Boolean(process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL),
+      pepper: Boolean(process.env.SYNC_PEPPER),
+      kv: Boolean(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL),
+    }));
   }
 
   if (pathname.startsWith('/api/')) {
@@ -185,9 +196,16 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  const kv = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const db     = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
+  const pepper = process.env.SYNC_PEPPER;
+  const kv     = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
   console.log(`byebyenotes listening on :${PORT}`);
+  // Say which half is missing. "sync is broken" with no hint as to which of two
+  // env vars is unset is the kind of thing that eats an afternoon.
+  console.log(db && pepper
+    ? '/api/sync -> Postgres.'
+    : `/api/sync returns 503 — missing ${[!db && 'DATABASE_URL', !pepper && 'SYNC_PEPPER'].filter(Boolean).join(' and ')}.`);
   console.log(kv
-    ? 'KV configured — /sync, /api/img and tiny links are live.'
-    : 'No KV env vars — the app runs fully; sync/images/tiny links return 503 by design.');
+    ? '/api/img and tiny links -> KV.'
+    : 'No KV env vars — pasted images and tiny links return 503 by design.');
 });

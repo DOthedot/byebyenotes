@@ -1,14 +1,19 @@
-# byebyenotes has no build step — no bundler, no transpiler, no runtime deps.
-# So this is a single stage: copy the files, run the server. Nothing to compile.
+# byebyenotes has no build step — no bundler, no transpiler. There is still
+# nothing to compile, so this stays a single stage; the only install is `pg`.
 FROM node:20-alpine
 
-# Node 18+ is required: api/*.js use global fetch to reach the KV REST API.
+# Node 18+ is required: api/*.js use global fetch.
 WORKDIR /app
+
+# Dependencies first, on their own layer, so editing app.js does not reinstall.
+# `pg` became a real runtime dependency when api/sync.js moved to Postgres — this
+# image previously installed nothing at all and would now crash on require('pg').
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Only the files the server actually serves or requires. Kept explicit rather
 # than `COPY . .` so tests, docs and local scratch never reach the image
 # (.dockerignore is the backstop, this is the intent).
-COPY package.json ./
 COPY server.js ./
 COPY index.html app.js style.css ./
 COPY api/ ./api/
@@ -22,6 +27,6 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-# No package installs: there are no runtime dependencies to install, which is
-# also why there's no `npm ci` layer to cache.
+# Migrations are NOT run here. A container that migrates on boot races itself the
+# moment there is more than one replica; `npm run migrate` is a deliberate step.
 CMD ["node", "server.js"]

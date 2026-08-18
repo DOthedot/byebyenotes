@@ -21,7 +21,7 @@ Your blocks, font, and theme are compressed with [LZ-String](https://github.com/
 - **Sidebar backgrounds** — `/settings` opens a floating window with wallpaper swatches and drag bars for opacity, blur, brightness, saturation, text scrim and position. Filters sit on their own layer, so file names stay sharp at any blur
 - **Recent notes** — your last 30 notes are kept in localStorage and listed on the start screen; the URL also auto-syncs as you type, so refreshing never loses work
 - **Folders** — hover a recent note and hit ▦ to file it into a folder (pick one or type a new name); folders are collapsible and sync across devices
-- **Cross-device sync (opt-in)** — `/sync` + a passphrase syncs your recent notes and theme/font across devices via Vercel KV. The passphrase never leaves the browser (only its SHA-256 hash keys the store). Logged out, the app stays 100% serverless
+- **Cross-device sync (opt-in)** — `/sync` + a passphrase syncs your notes, folders and theme/font across devices, stored in Postgres. The passphrase never leaves the browser (only its SHA-256 hash is sent). Deletes propagate properly — a note removed on one device stays removed. Signed out, the app stays 100% serverless
 - **Remembered preferences** — your chosen theme and font apply to every fresh note (localStorage)
 - **Focus mode** — `/focus` or `⌘.` dims everything but the block you're writing
 - **Hover controls** — move, delete, and add blocks with the hover gutter; code blocks get a header with language badge, line count, and copy
@@ -85,18 +85,53 @@ npx serve .
 
 ## Enabling cross-device sync (one-time setup)
 
-Sync needs a KV store attached to the Vercel project:
+Sync needs a **Postgres** database and a pepper for the auth HMAC:
 
-1. Vercel dashboard → your project → **Storage** → **Create Database** → **Upstash Redis** (free tier is plenty)
-2. Connect it to the project — Vercel injects `KV_REST_API_URL` / `KV_REST_API_TOKEN` (or `UPSTASH_REDIS_REST_*`) automatically
-3. Redeploy. Done — `/sync` now works.
+1. Provision Postgres (Railway's one-click Postgres is what this repo is set up for).
+2. Set two variables on the app:
 
-Without a KV store, `/api/sync` returns 503 and the app quietly stays local-only.
+   | Variable | |
+   |----------|---|
+   | `DATABASE_URL` | Postgres connection string. On Railway use the **internal** one — it stays on the private network. |
+   | `SYNC_PEPPER` | 32 random bytes: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
+
+3. Apply the schema — **once, deliberately, not on container boot**:
+
+   ```bash
+   DATABASE_PUBLIC_URL=… npm run migrate
+   ```
+
+   Locally this needs the *public* URL: Railway's internal hostname only resolves
+   from inside its network.
+
+4. Redeploy. `GET /healthz` reports `{"db":true,"pepper":true}` when both are set.
+
+> **`SYNC_PEPPER` must never change once people are using it.** It peppers the HMAC
+> that maps a passphrase to a user row. Rotating it doesn't invalidate sessions — it
+> orphans every existing user's notes.
+
+Without them `/api/sync` returns 503 and the app quietly stays local-only. Nothing
+else degrades: a note still lives entirely in its URL.
+
+### What's actually stored
+
+One row per note (`blocks` as JSONB), one per folder, one prefs blob per user — not a
+single value per account. That is what makes deletion work: a deleted note gets a
+`deleted_at` tombstone, which other devices can *see*. The old KV design stored one
+list per account, where a delete was just an absence — and absence carries no
+timestamp, so the next sync from a device that still had the note put it straight back.
+
+The note hash in your URL is **not** stored server-side; the client re-derives it from
+`blocks`. Two copies of one note is two things that can disagree.
+
+Schema lives in [`migrations/`](./migrations/); the wire contract is documented in
+[`api/README.md`](./api/README.md).
 
 ## Deploying with Docker (Railway, Fly, a VPS)
 
-Vercel is the primary target, but the app also runs as a container. `server.js` is a
-zero-dependency Node adapter that supplies the two things Vercel provides for free:
+**This is now the primary target.** Vercel has no route to a Railway-private database,
+so the deployment that owns Postgres owns `/api/sync`. `server.js` is a Node adapter
+that supplies the two things Vercel provides for free:
 static hosting with the SPA rewrite from `vercel.json`, and the enhanced `req`/`res`
 that `api/*.js` expect (`req.query`, `req.body`, `res.status().json()`). The handlers
 themselves are untouched, so the same files keep working on Vercel.
@@ -106,23 +141,27 @@ docker build -t byebyenotes .
 docker run -p 3000:3000 byebyenotes          # → http://localhost:3000
 ```
 
-Or without Docker: `node server.js` (Node 18+, since `api/*.js` use global `fetch`).
+Or without Docker: `npm ci --omit=dev && node server.js` (Node 18+, since `api/*.js`
+use global `fetch`). `pg` is the only runtime dependency — there is still no build step,
+no bundler and no client-side package.
 
 **On Railway:** point it at the repo — `railway.json` selects the Dockerfile and sets
 `/healthz` as the health check. Railway injects `PORT`; the server reads it.
 
-**Sync, images and tiny links need a KV store.** `api/*.js` speak the **Upstash REST
-API**, not the Redis wire protocol — so Railway's own Redis plugin will *not* work.
-Add an [Upstash Redis](https://upstash.com) database (free tier is plenty) and set:
+**The two backing stores are configured separately**, and each fails soft on its own:
 
-| Variable | |
-|----------|---|
-| `KV_REST_API_URL` | Upstash REST URL (`UPSTASH_REDIS_REST_URL` also accepted) |
-| `KV_REST_API_TOKEN` | Upstash REST token (`UPSTASH_REDIS_REST_TOKEN` also accepted) |
+| Feature | Needs | Without it |
+|---|---|---|
+| `/sync` | `DATABASE_URL` + `SYNC_PEPPER` | 503; the app stays local-only |
+| Pasted images, tiny links | `KV_REST_API_URL` + `KV_REST_API_TOKEN` | 503; paste falls back to no upload |
 
-Without them the app still runs completely — notes live in the URL — and `/sync`,
-image upload and tiny links return 503, exactly as on Vercel with no KV attached.
-`GET /healthz` reports whether KV is configured.
+`api/img.js` and `api/tiny.js` speak the **Upstash REST API**, not the Redis wire
+protocol — so Railway's own Redis plugin will *not* work for those; use
+[Upstash](https://upstash.com). `api/sync.js` uses ordinary Postgres and *does* work
+with Railway's Postgres plugin.
+
+`GET /healthz` reports which of the two is configured, without querying either — a
+health check that pings the database turns a ten-second blip into a restart loop.
 
 The container serves an **allowlist** of static files (`index.html`, `app.js`,
 `style.css`, `/assets/**`); everything else falls through to the SPA shell. That is
