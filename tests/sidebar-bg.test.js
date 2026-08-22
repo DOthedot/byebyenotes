@@ -116,3 +116,42 @@ test('sidebarCssVars emits every custom property as a string', () => {
 test('sidebarCssVars maps the none wallpaper to the css keyword none', () => {
   expect(mod.sidebarCssVars(mod.normalizeSidebarCfg({ wall: 'none' }))['--sb-img']).toBe('none');
 });
+
+describe('normalizeTextCfg — font sizes reach a CSS length, so clamp them', () => {
+  const { normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES } = mod;
+
+  test('defaults for missing, empty and non-object input', () => {
+    for (const bad of [undefined, null, {}, 'nope', 42, []]) {
+      expect(normalizeTextCfg(bad)).toEqual(TEXT_DEFAULTS);
+    }
+  });
+
+  test('values are clamped to their range rather than trusted', () => {
+    // An unclamped value here makes the app unreadable with no way back to the
+    // control that caused it — and this arrives from other devices via /api/sync.
+    const big = normalizeTextCfg({ size: 9999, ui: 9999 });
+    expect(big.size).toBe(TEXT_RANGES.size[1]);
+    expect(big.ui).toBe(TEXT_RANGES.ui[1]);
+    const small = normalizeTextCfg({ size: -50, ui: 0 });
+    expect(small.size).toBe(TEXT_RANGES.size[0]);
+    expect(small.ui).toBe(TEXT_RANGES.ui[0]);
+  });
+
+  test('half-steps survive — they matter at these sizes', () => {
+    expect(normalizeTextCfg({ size: 13.5, ui: 12.5 })).toEqual({ size: 13.5, ui: 12.5 });
+    expect(normalizeTextCfg({ size: 13.7 }).size).toBe(13.5);
+  });
+
+  test('junk in one field does not poison the other', () => {
+    expect(normalizeTextCfg({ size: 'huge', ui: 11 })).toEqual({ size: TEXT_DEFAULTS.size, ui: 11 });
+  });
+
+  test('NaN and Infinity fall back to the default', () => {
+    expect(normalizeTextCfg({ size: NaN, ui: Infinity })).toEqual(TEXT_DEFAULTS);
+  });
+
+  test('the default renders the app exactly as it was before the feature', () => {
+    // 14px/12.5px are the values that were hardcoded in style.css.
+    expect(TEXT_DEFAULTS).toEqual({ size: 14, ui: 12.5 });
+  });
+});

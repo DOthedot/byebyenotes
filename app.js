@@ -144,6 +144,56 @@ const SIDEBAR_LOOK_DEFAULTS = Object.fromEntries(
 // Below this viewport width the panel is display:none (see the media query in
 // style.css) — the two must stay in step or ⌘B writes a state nobody can see.
 const SIDEBAR_BREAKPOINT = 820;
+
+// Text sizing. Deliberately NOT part of the sidebar config: that one is the
+// wallpaper, and "reset background" is derived from it — folding font size in there
+// would mean resetting the wallpaper also resized your text.
+//   size — the note you are reading (--font-size, already used throughout the editor)
+//   ui   — the furniture: sidebar rows and tabs (--ui-font-size)
+const TEXT_DEFAULTS = { size: 14, ui: 12.5 };
+const TEXT_RANGES   = { size: [10, 24], ui: [9, 20] };
+const TEXT_BARS = [
+  { key: 'size', label: 'note text',  unit: 'px' },
+  { key: 'ui',   label: 'side panel', unit: 'px' },
+];
+
+// Same contract as normalizeSidebarCfg: this arrives from localStorage and from other
+// devices via /api/sync, so clamp rather than trust — an unclamped value goes straight
+// into a CSS length and can make the app unreadable with no way back to the control.
+function normalizeTextCfg(raw) {
+  const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  const cfg = {};
+  Object.keys(TEXT_RANGES).forEach(k => {
+    const [lo, hi] = TEXT_RANGES[k];
+    const n = Number(src[k]);
+    // Half-steps are useful at these sizes, so round to 0.5 rather than to an integer.
+    cfg[k] = Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n * 2) / 2)) : TEXT_DEFAULTS[k];
+  });
+  return cfg;
+}
+
+function applyTextCfg(cfg) {
+  const c = normalizeTextCfg(cfg);
+  document.documentElement.style.setProperty('--font-size', c.size + 'px');
+  document.documentElement.style.setProperty('--ui-font-size', c.ui + 'px');
+  return c;
+}
+
+function loadTextCfg() {
+  return normalizeTextCfg(loadPrefs().text);
+}
+
+function saveTextCfg(patch) {
+  const cfg = normalizeTextCfg(Object.assign(loadTextCfg(), patch));
+  try {
+    const prefs = loadPrefs();
+    prefs.text = cfg;
+    localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { t: Date.now() })));
+  } catch (e) { /* storage unavailable — the size stays session-only */ }
+  applyTextCfg(cfg);
+  pushNow();
+  return cfg;
+}
 const TAB_MAX = 9;   // Ctrl+1..9 addresses them, so nine is the natural ceiling
 
 const SYNC_DELAY     = 800;
@@ -166,8 +216,7 @@ let folderTarget     = null;    // snapshot nid being filed into a folder
 let formatSel        = null;    // { blockId, range } saved while the format palette is open
 const collapsedFolders = new Set();
 let copiedTimer  = null;
-let saveBeforeNew  = true;
-let pendingExport  = null;      // 'md' | 'pdf' | 'docx' | 'html' | 'newNote'
+let pendingExport  = null;      // 'md' | 'pdf' | 'docx' | 'html'
 let focusMode    = false;
 let shareOpen    = false;
 let emptyVisible = false;
@@ -189,6 +238,8 @@ let fab;
 let sidebarEl, sidebarTree, sidebarCount, appShell, sbNew;
 let tablineEl, tabsEl, paletteBars;
 let barSaveTimer = null;
+let textSaveTimer = null;   // separate from barSaveTimer so the two bar groups don't
+                            // cancel each other's debounced save
 let nextFolderParent = null;   // folder the /newFolder prompt should nest under
 let selectCurrentOnce = false;  // one-shot: open a list on its current value
 let renameTarget = null;       // nid being renamed by the /rename prompt
@@ -742,6 +793,9 @@ async function syncPull() {
     // which is almost always, synced theme and font were stored and never shown.
     if (THEMES.includes(data.prefs.theme)) applyTheme(data.prefs.theme);
     if (FONTS.includes(data.prefs.font))   applyFont(data.prefs.font);
+    // Text size is a preference like the others, so a synced device should look the
+    // same — pulled through normalizeTextCfg since a remote value reaches a CSS length.
+    if (data.prefs.text) applyTextCfg(data.prefs.text);
     // Sidebar background/opacity/blur isn't tied to the note on screen, so it
     // always applies live — pulled through normalizeSidebarCfg since a remote
     // config must never reach a CSS property unvalidated.
@@ -1148,7 +1202,6 @@ function buildCommandList() {
     { id: 'newNote', label: '/newNote', ico: '✚', desc: 'start a fresh note' },
     { id: 'newFolder', label: '/newFolder', ico: '▸', desc: 'create a folder and start a note in it' },
     { id: 'rename',    label: '/rename',    ico: '✎', desc: 'rename the current note' },
-    { id: 'saveBeforeNew', label: '/save_before_new', ico: '⋯', desc: 'save before new note', hint: saveBeforeNew ? 'on' : 'off' },
     { id: 'help',   label: '/help',   ico: '?', desc: 'commands, shortcuts & formatting' },
   ];
 }
@@ -1273,12 +1326,13 @@ function openPalette(mode, opts = {}) {
   // don't exist yet here, so flag it and let renderPaletteList apply it once.
   selectCurrentOnce = !opts.keep;
   const keptQuery = opts.keep ? paletteSearch.value : '';
-  // The pending folder is only ever legal across newFolder → filename → newNote.
-  // Any other mode transition means that flow was abandoned (escape out of the
-  // filename prompt lands on 'command' without ever calling closePalette), so drop
-  // it here rather than let it misfile whatever note is created next. This is the
-  // third bug from this one global; sweeping at every hop closes the class.
-  if (mode !== 'filename' && mode !== 'newFolder') nextNoteFolder = null;
+  // The pending folder is set by the newItem → "note" branch and read by newNote()
+  // immediately after, with no palette hop in between — so any mode transition at all
+  // means that flow was abandoned, and the value must die rather than misfile whatever
+  // note is created next. (It used to survive 'filename' too, because /newNote routed
+  // through the export prompt; that flow is gone.) This global has produced three
+  // separate bugs; sweeping at every hop is what closes the class.
+  if (mode !== 'newFolder') nextNoteFolder = null;
   if (mode !== 'newFolder' && mode !== 'newItem') nextFolderParent = null;
   if (mode !== 'rename') renameTarget = null;
 
@@ -1425,9 +1479,9 @@ function renderPaletteList(items) {
   // renderPaletteList also runs on every keystroke, where re-homing the cursor onto
   // the current value would fight the user's own ↑/↓.
   if (selectCurrentOnce && !paletteSearch.value) {
-    // `current` only. `hint: 'on'` is a toggle badge (/sync, /save_before_new) —
-    // homing on it made Cmd+K open on /save_before_new, where a habitual Enter
-    // silently toggled the setting.
+    // `current` only. `hint: 'on'` is a toggle badge (/sync) rather than a current
+    // value — homing on one made Cmd+K open on a toggle, where a habitual Enter
+    // silently flipped a setting the user never meant to touch.
     const cur = items.findIndex(it => it && it.current === true);
     if (cur >= 0) paletteIndex = cur;
   }
@@ -1691,17 +1745,8 @@ function confirmPalette() {
   // Filename mode — read directly from search input, no list needed
   if (paletteMode === 'filename') {
     const filename = paletteSearch.value.trim() || 'notes';
-    // closePalette() clears nextNoteFolder as its abandonment sweep, and this is the
-    // one path that legitimately continues into newNote() — so carry the value across
-    // and re-arm it. Without this, completing /newFolder with saveBeforeNew on (the
-    // default) would file the new note nowhere.
-    const carryFolder = nextNoteFolder;
     closePalette();
-    if (pendingExport === 'newNote') {
-      exportHtmlAs(filename);
-      nextNoteFolder = carryFolder;
-      newNote();
-    } else if (pendingExport === 'md')   exportMd(filename);
+    if (pendingExport === 'md')          exportMd(filename);
     else if (pendingExport === 'pdf')    exportPdf(filename);
     else if (pendingExport === 'docx')   exportDocx(filename);
     else if (pendingExport === 'html')   exportHtmlAs(filename);
@@ -1780,11 +1825,6 @@ function confirmPalette() {
     if (selected.id === 'newNote') { startNewNote(); return; }
     if (selected.id === 'newFolder') { openPalette('newFolder'); return; }
     if (selected.id === 'rename')    { renameTarget = noteId; openPalette('rename'); return; }
-    if (selected.id === 'saveBeforeNew') {
-      saveBeforeNew = !saveBeforeNew;
-      closePalette();
-      return;
-    }
     if (selected.id === 'delete') {
       closePalette();
       deleteBlock(activeBlockId);
@@ -2302,7 +2342,20 @@ function renderSidebarBars(show) {
   paletteBars.classList.toggle('hidden', !show);
   if (!show) { paletteBars.innerHTML = ''; return; }
   const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
+  const text = loadTextCfg();
   paletteBars.innerHTML =
+    // Text size first: it sits directly under the sidebar toggle, which is what the
+    // panel is mostly about, and it is the control people reach for most often.
+    `<div class="pal-sect">text size</div>` +
+    TEXT_BARS.map(b => {
+      const [lo, hi] = TEXT_RANGES[b.key];
+      return `<div class="pal-bar">
+        <label for="pt-${b.key}">${b.label}</label>
+        <input id="pt-${b.key}" type="range" min="${lo}" max="${hi}" step="0.5"
+               value="${text[b.key]}" data-textbar="${b.key}" />
+        <output id="pto-${b.key}">${text[b.key]}${b.unit}</output>
+      </div>`;
+    }).join('') +
     // Swatches, not list rows: you pick a background by looking at it. `none` gets a
     // checkerboard so "off" is visibly different from "a very dark wallpaper".
     `<div class="pal-sect">background</div>` +
@@ -2339,16 +2392,40 @@ function renderSidebarBars(show) {
 
 // Live-drag writes straight to the DOM and defers the (synced) save, so dragging a
 // slider doesn't fire a PUT per pixel. `change` fires once on release.
+// While the panel is open the sliders on screen are the truth, not the saved prefs.
+// Rebuilding from storage on every input looked fine but silently reverted a sibling:
+// the save is debounced 250ms, so moving a second bar inside that window read a stale
+// value for the first and wrote it straight back over the change you had just made.
+function readBars(selector, base) {
+  const cfg = Object.assign({}, base);
+  paletteBars.querySelectorAll(selector).forEach(input => {
+    cfg[input.dataset.textbar || input.dataset.bar] = Number(input.value);
+  });
+  return cfg;
+}
+
+function onTextBarInput(e) {
+  const input = e.target.closest('[data-textbar]');
+  if (!input) return;
+  const key = input.dataset.textbar;
+  const cfg = normalizeTextCfg(readBars('[data-textbar]', loadTextCfg()));
+  const unit = (TEXT_BARS.find(b => b.key === key) || {}).unit || '';
+  const out = document.getElementById('pto-' + key);
+  if (out) out.textContent = input.value + unit;
+  applyTextCfg(cfg);                            // preview live, same as the image bars
+  clearTimeout(textSaveTimer);                  // its own timer: a text bar and an
+  textSaveTimer = setTimeout(() => saveTextCfg(cfg), 250);   // image bar must not
+}                                                            // cancel each other's save
+
 function onSidebarBarInput(e) {
   const input = e.target.closest('[data-bar]');
   if (!input) return;
   const key = input.dataset.bar;
-  const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
-  cfg[key] = Number(input.value);
+  const cfg = normalizeSidebarCfg(readBars('[data-bar]', normalizeSidebarCfg(loadPrefs().sidebar)));
   const unit = (SIDEBAR_BARS.find(b => b.key === key) || {}).unit || '';
   const out = document.getElementById('po-' + key);
   if (out) out.textContent = input.value + unit;
-  applySidebarCfg(normalizeSidebarCfg(cfg));   // preview only
+  applySidebarCfg(cfg);                        // preview only
   clearTimeout(barSaveTimer);
   barSaveTimer = setTimeout(() => saveSidebarCfg(cfg), 250);
 }
@@ -2876,18 +2953,18 @@ function exportHtmlAs(filename) {
 
 // The single entry point for "start a fresh note", shared by the /newNote command and
 // the sidebar's + button. newNote() itself is destructive — it swaps noteId, throws
-// away blocks[] and clears the hash — so both guards belong here, not at the call site:
-//   1. syncNow() flushes the current note into the URL and bbn.recent now, instead of
-//      leaving it to the 800ms scheduleSync debounce a click can easily beat.
-//   2. /save_before_new routes through the filename prompt the user opted into.
+// away blocks[] and clears the hash — so the guard belongs here, not at the call site:
+// syncNow() flushes the current note into the URL and bbn.recent now, instead of
+// leaving it to the 800ms scheduleSync debounce a click can easily beat.
+//
+// This used to route through the "Save as" prompt first and download the note you were
+// leaving. That was a safety net from when a note lived only in location.hash and
+// really could be lost; once notes persisted to bbn.recent it was guarding against
+// something that can no longer happen, and read as an unexplained download prompt in
+// the middle of creating a note. /export covers downloading a note deliberately.
 // Callable with the palette open (a command) or closed (the + button).
 function startNewNote() {
   syncNow();
-  if (saveBeforeNew) {
-    pendingExport = 'newNote';
-    openPalette('filename');
-    return;
-  }
   if (paletteOpen) closePalette();
   newNote();
 }
@@ -3100,6 +3177,13 @@ function attachEvents() {
 
   paletteSearch.addEventListener('keydown', (e) => {
     const count = paletteFiltered.length;
+    // In /settings, arrowing past the last row drops into the swatches and bars below
+    // instead of wrapping to the top — they are part of the same panel, and wrapping
+    // was why they could only be reached with a mouse.
+    if (e.key === 'ArrowDown' && paletteMode === 'settings' && paletteIndex >= count - 1) {
+      const first = paletteBars.querySelector('.pal-swatch, .pal-bar input');
+      if (first) { e.preventDefault(); first.focus(); return; }
+    }
     if (e.key === 'ArrowDown' && count) {
       e.preventDefault();
       paletteIndex = (paletteIndex + 1) % count;
@@ -3280,31 +3364,85 @@ function attachEvents() {
   sbNew.addEventListener('click', () => openPalette('newItem'));
 
   paletteBars.addEventListener('input', onSidebarBarInput);
+  paletteBars.addEventListener('input', onTextBarInput);
   paletteBars.addEventListener('click', (e) => {
     if (e.target.closest('[data-upload]')) return pickSidebarImage();
     const sw = e.target.closest('[data-wall]');
     if (!sw) return;
-    saveSidebarCfg({ wall: sw.dataset.wall });
+    const wall = sw.dataset.wall;
+    const hadFocus = document.activeElement === sw;
+    saveSidebarCfg({ wall });
     renderSidebarBars(true);          // repaint so the ✓ moves to the new swatch
+    // The repaint replaces innerHTML, so the button that was just activated no longer
+    // exists — and with it goes focus, leaving the arrow keys dead after a keyboard
+    // selection. Put focus back on its replacement.
+    if (hadFocus) paletteBars.querySelector(`[data-wall="${CSS.escape(wall)}"]`)?.focus();
   });
 
-  // Arrow keys walk the swatch grid. Without this the grid was mouse-only, while
-  // the rest of the palette is keyboard-first.
+  // ── Keyboard inside /settings ──────────────────────────────────────────────
+  // The panel is two worlds: the palette rows (driven by paletteIndex, focus stays in
+  // the search input) and this region of real focusable controls. Arrowing off the end
+  // of the rows used to wrap back to the top, so the swatches and bars could only be
+  // reached with a mouse — in a palette that is otherwise keyboard-first.
+  //
+  // Everything here is one linear chain in DOM order; the swatch grid is the only
+  // special case, because stepping through sixteen wallpapers one at a time with ↓
+  // would be worse than useless.
+  function settingsChain() {
+    return [...paletteBars.querySelectorAll('.pal-swatch, .pal-bar input')];
+  }
+
+  function swatchesPerRow() {
+    const grid = paletteBars.querySelector('.pal-swatches');
+    const one  = paletteBars.querySelector('.pal-swatch');
+    if (!grid || !one || !one.offsetWidth) return 1;
+    return Math.max(1, Math.round(grid.clientWidth / one.offsetWidth));
+  }
+
   paletteBars.addEventListener('keydown', (e) => {
-    const sw = e.target.closest('.pal-swatch');
-    if (!sw || !['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) return;
-    const all = [...paletteBars.querySelectorAll('.pal-swatch')];
-    const i = all.indexOf(sw);
-    // Column count from the rendered grid, so wrapping matches what's on screen.
-    const perRow = Math.max(1, Math.round(paletteBars.querySelector('.pal-swatches').clientWidth / sw.offsetWidth));
-    const step = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1
-               : e.key === 'ArrowUp' ? -perRow : perRow;
-    const next = all[Math.min(all.length - 1, Math.max(0, i + step))];
-    if (next) { e.preventDefault(); e.stopPropagation(); next.focus(); }
+    const el = e.target.closest('.pal-swatch, .pal-bar input');
+    if (!el) return;
+    const isBar = !!el.closest('.pal-bar');
+
+    // ←/→ on a slider is the slider's own business — that is the whole point of a
+    // dragger you can also nudge.
+    if (isBar && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.stopPropagation(); return; }
+
+    // Same destination as Escape from the row list above — /settings goes back to the
+    // command menu. Closing outright from a swatch but stepping back from a row is the
+    // kind of inconsistency that makes a panel feel unpredictable.
+    if (e.key === 'Escape') { e.stopPropagation(); dispatchPaletteEsc(); return; }
+
+    if (e.key === 'Enter' || e.key === ' ') {
+      if (isBar) { e.stopPropagation(); return; }
+      e.preventDefault(); e.stopPropagation(); el.click(); return;
+    }
+
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const swatches = [...paletteBars.querySelectorAll('.pal-swatch')];
+      const next = swatches[swatches.indexOf(el) + (e.key === 'ArrowLeft' ? -1 : 1)];
+      if (next) { e.preventDefault(); e.stopPropagation(); next.focus(); }
+      return;
+    }
+
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault(); e.stopPropagation();
+    const down = e.key === 'ArrowDown';
+
+    // Within the grid, ↑/↓ move a whole row — matching what the eye expects.
+    if (!isBar) {
+      const swatches = [...paletteBars.querySelectorAll('.pal-swatch')];
+      const target = swatches.indexOf(el) + (down ? swatchesPerRow() : -swatchesPerRow());
+      if (target >= 0 && target < swatches.length) return swatches[target].focus();
+    }
+
+    // Otherwise step out of whatever we are in, along the chain.
+    const chain = settingsChain();
+    const next = chain[chain.indexOf(el) + (down ? 1 : -1)];
+    if (next) return next.focus();
+    // Off the top: hand focus back to the list, where ↑/↓ drive paletteIndex again.
+    if (!down) paletteSearch.focus();
   });
-  // Keys inside a slider are the slider's own; don't let the palette's ↑/↓/Enter
-  // navigation steal them while the user is adjusting a bar.
-  paletteBars.addEventListener('keydown', (e) => { if (e.target.closest('[data-bar]')) e.stopPropagation(); });
 
   tablineEl.addEventListener('click', (e) => {
     if (e.target.id === 'tab-new')  return openPalette('newItem');
@@ -3844,6 +3982,10 @@ document.addEventListener('DOMContentLoaded', () => {
   openTabs = loadTabs();
   ensureActiveTab();
   applySidebarCfg(normalizeSidebarCfg(loadPrefs().sidebar));
+  // Before first paint would be better, but the pre-paint script in index.html only
+  // restores the panel's open/closed state; this at least lands with the rest of the
+  // boot prefs rather than after the first interaction.
+  applyTextCfg(loadTextCfg());
 
   if (syncKey) syncPull().catch(() => {});
 });
@@ -3915,6 +4057,7 @@ if (typeof module !== 'undefined') {
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
     normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS,
+    normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
     snapshotToWireNote, wireNoteToSnapshot,
   };
