@@ -1559,6 +1559,12 @@ function closePalette() {
   // block, so focus must return there on close — even on the start screen, where we
   // otherwise avoid grabbing focus for global palettes (Cmd+K command/theme/font).
   const wasAnchored = paletteAnchor !== null;
+  // Did the palette itself own focus? Captured before anything is hidden, because
+  // display:none blurs the search input and drops focus to <body>, which would make
+  // this look false by the time we need it.
+  const paletteHadFocus = paletteEl.contains(document.activeElement) ||
+                          document.activeElement === document.body ||
+                          document.activeElement === null;
   revertPreview();
   paletteOpen = false;
   paletteMode = null;
@@ -1578,7 +1584,11 @@ function closePalette() {
   // by clicking the backdrop bypasses openPalette's per-hop sweep, so a later
   // /newFolder would silently nest under the stale parent.
   nextFolderParent = null;
-  if (activeBlockId !== null && (!emptyVisible || wasAnchored)) {
+  // The start-screen exception stops a global palette from yanking focus into the
+  // editor on load. It must not apply when the palette was holding focus: Cmd+K then
+  // Escape left focus on <body>, so the next keystroke went nowhere and the app
+  // looked frozen until you clicked. Give back what we took.
+  if (activeBlockId !== null && (!emptyVisible || wasAnchored || paletteHadFocus)) {
     const content = getContentEl(activeBlockId);
     // A block that already has markdown hides its editable layer when blurred; reveal
     // it before focusing or .focus() no-ops on a display:none element and focus falls
@@ -2493,6 +2503,16 @@ function pruneTabs() {
   if (kept.length !== openTabs.length) { openTabs = kept; saveTabs(); }
 }
 
+// Which name a tab shows. Pure so the precedence rule is testable: the active tab
+// normally derives its name from the live blocks (so it tracks what you type), but a
+// name you set yourself has to outrank that — otherwise renaming the note you are
+// looking at appears to do nothing until you switch away.
+function tabTitle(snap, isActive, liveBlocks) {
+  if (snap && snap.renamed && snap.title) return stripTitleMarkup(snap.title) || 'untitled';
+  if (isActive) return noteTitle(liveBlocks) || 'untitled';
+  return stripTitleMarkup((snap && snap.title) || '') || 'untitled';
+}
+
 function renderTabline() {
   if (!tabsEl) return;
   pruneTabs();
@@ -2500,7 +2520,7 @@ function renderTabline() {
   tabsEl.innerHTML = '';
   openTabs.forEach((nid, i) => {
     const snap = snaps.find(s => s.nid === nid);
-    const title = nid === noteId ? noteTitle(blocks) : stripTitleMarkup((snap && snap.title) || '') || 'untitled';
+    const title = tabTitle(snap, nid === noteId, blocks);
     const b = document.createElement('button');
     b.className = 'tab' + (nid === noteId ? ' active' : '');
     b.dataset.tab = nid;
@@ -2654,7 +2674,22 @@ function applyRename(nid, title) {
 
 function renderSidebar() {
   if (!sidebarTree) return;
-  const snaps = loadSnapshots();
+  const stored = loadSnapshots();
+  // A brand-new note has no snapshot yet: saveSnapshot refuses to persist one that
+  // can't be reopened, so nothing is written until you type something. The tabline
+  // shows it regardless (ensureActiveTab), which left the new note visible up top and
+  // missing from the tree — looking like the sidebar had simply failed to notice it.
+  const unsaved = !emptyVisible && noteId && !stored.some(s => s.nid === noteId);
+  const snaps = unsaved
+    ? [{
+        nid: noteId,
+        title: noteTitle(blocks) || 'untitled',
+        folder: (pendingFolder && pendingFolder.nid === noteId) ? pendingFolder.folder : null,
+        langs: [],
+        t: Date.now(),
+        unsaved: true,
+      }, ...stored]
+    : stored;
   const rows  = buildTreeRows(snaps, collapsedFolders, loadFolders());
   sidebarTree.innerHTML = '';
   rows.forEach(r => {
@@ -2676,13 +2711,18 @@ function renderSidebar() {
     } else {
       const snap = snaps.find(s => s.nid === r.nid);
       b.dataset.nid = r.nid;
-      b.draggable = true;             // drag onto a folder row to file it
+      // Rename and drag-to-file both resolve the note through loadSnapshots(), which
+      // holds nothing until the first autosave. Showing those controls on a note that
+      // has no content yet would give the user a button that quietly does nothing, so
+      // they appear once the note is real — which is the moment you finish typing.
+      const unsavedRow = !!(snap && snap.unsaved);
+      b.draggable = !unsavedRow;      // drag onto a folder row to file it
       b.innerHTML =
         `<span class="sb-chev"></span>` +
         sidebarIconHtml(snap) +
         `<span class="sb-name">${escapeHtml(fileLabel(r.title, snap))}</span>` +
         (r.nid === noteId ? '<span class="sb-open">●</span>' : '') +
-        `<span class="sb-act" data-rename="${escapeHtml(r.nid)}" title="rename">✎</span>` +
+        (unsavedRow ? '' : `<span class="sb-act" data-rename="${escapeHtml(r.nid)}" title="rename">✎</span>`) +
         `<span class="sb-act sb-del" data-delnote="${escapeHtml(r.nid)}" title="delete note">✕</span>`;
     }
     sidebarTree.appendChild(b);
@@ -2864,9 +2904,10 @@ function newNote() {
   updateCapacityUI();
   focusBlock(blocks[0].id, false);
   updateStatus();
-  // newNote() uses replaceState, which fires no hashchange — so the tabline would
-  // never learn about a note created this way without an explicit call.
+  // newNote() uses replaceState, which fires no hashchange — so neither the tabline
+  // nor the tree would learn about a note created this way without an explicit call.
   ensureActiveTab();
+  renderSidebar();
 }
 
 function exportDocx(filename = 'notes') {
@@ -3868,7 +3909,7 @@ if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl, insertDividerBlocks,
     renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
-    capacityLevel, timeAgo, mergeRecents, truncateTitle, groupByFolder, stripTitleMarkup, folderSegments, buildTreeRows, stripFormatting,
+    capacityLevel, timeAgo, mergeRecents, truncateTitle, tabTitle, groupByFolder, stripTitleMarkup, folderSegments, buildTreeRows, stripFormatting,
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
     langIcon, langBadgeHtml, soleLang, fileLabel, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
