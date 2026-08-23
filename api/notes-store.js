@@ -201,12 +201,25 @@ function sanitizeNids(raw) {
 // half-written prefs object is worse than the previous one.
 function sanitizePrefs(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  // The wallpaper travels in its own column; leaving a copy here would blow the
-  // 32KB budget the moment somebody uploads one.
-  const { sidebar, ...rest } = raw;
-  const cleaned = sidebar && typeof sidebar === 'object' && !Array.isArray(sidebar)
-    ? { ...rest, sidebar: { ...sidebar, custom: undefined } }
-    : rest;
+  // Uploaded wallpapers travel in their own column; leaving a copy here would blow the
+  // 32KB budget the moment somebody uploads one — and the failure is invisible from
+  // the client, which sees a 200 and never learns its prefs were dropped. That kills
+  // theme, font, folders and tabs sync too, indefinitely.
+  //
+  // Stripped by SHAPE rather than by naming each surface: `sidebar` was the only one
+  // when this was written, `mainBg` arrived later and reintroduced the same bug
+  // verbatim. Anything with a `custom` data URI gets the same treatment, so a third
+  // surface cannot repeat it a third time.
+  const cleaned = {};
+  for (const [k, v] of Object.entries(raw)) {
+    // Strip on the key being PRESENT, not on it holding a string. Requiring a string
+    // left the original bug reachable through `custom: { nested: <40KB> }` — a shape
+    // this app's own client never produces, but a hand-written PUT trivially does, and
+    // guarding against exactly that is the point of doing this server-side at all.
+    cleaned[k] = (v && typeof v === 'object' && !Array.isArray(v) && 'custom' in v)
+      ? { ...v, custom: undefined }
+      : v;
+  }
   const safe = sanitizeJsonTree(cleaned, 0);
   if (safe === null) return null;
   const json = JSON.stringify(safe);

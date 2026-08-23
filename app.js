@@ -128,6 +128,7 @@ const WALLPAPERS = [
   { id: 'barb',   name: 'ceiling',    css: "url('/assets/wall-barberini.jpg')",  photo: true },
   { id: 'vortex', name: 'vortex',     css: "url('/assets/wall-vortex.jpg')",     photo: true },
   { id: 'vishnu', name: 'vishnu',     css: "url('/assets/wall-vishnu.jpg')",     photo: true },
+  { id: 'valley', name: 'valley',     css: "url('/assets/wall-valley.jpg')",     photo: true },
   { id: 'grid',   name: 'terminal',   css: 'repeating-linear-gradient(0deg,var(--accent-line) 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,var(--accent-line) 0 1px,transparent 1px 22px)' },
   { id: 'stars',  name: 'starfield',  css: 'radial-gradient(1.4px 1.4px at 18% 22%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 62% 12%,var(--fg-dim),transparent),radial-gradient(1.6px 1.6px at 38% 62%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 82% 78%,var(--fg-dim),transparent)' },
 ];
@@ -152,6 +153,92 @@ const SIDEBAR_LOOK_DEFAULTS = Object.fromEntries(
 // Below this viewport width the panel is display:none (see the media query in
 // style.css) — the two must stay in step or ⌘B writes a state nobody can see.
 const SIDEBAR_BREAKPOINT = 820;
+
+// ── Backgrounds on the other surfaces ────────────────────────────────────────
+// The sidebar's wallpaper machinery, pointed at the home screen and the note area.
+// Those two are one setting: they occupy the same region and are never on screen at
+// the same time, so configuring them separately would be a choice nobody can see.
+//
+// Shares WALLPAPERS and SIDEBAR_RANGES rather than duplicating them — one picker, one
+// set of limits, one place to add an image. Defaults to `none`, so nothing about the
+// home screen or the editor changes until someone opens the picker; the theme keeps
+// supplying the colour exactly as it does now.
+//
+// Scrim matters more here than it does in the sidebar. A busy panel is decoration; a
+// busy page you are trying to write on is a legibility problem, and dim text (checked
+// list items, comments) is what disappears first.
+const MAIN_BG_DEFAULTS = { wall: 'none', opacity: 40, blur: 3, bright: 70, sat: 100, scrim: 70, posX: 50, posY: 50, custom: '', customId: '' };
+
+// A cheap fingerprint of an uploaded image. The image itself never leaves the device
+// (it has no column), but this does — and it is what lets a pulling device tell "this
+// custom background is the one I have" from "this is a different device's picture".
+// Not a security hash: it only has to make an accidental collision implausible.
+function customFingerprint(dataUri) {
+  const str = String(dataUri || '');
+  if (!str) return '';
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < str.length; i++) {
+    h1 = Math.imul(h1 ^ str.charCodeAt(i), 0x01000193);
+    h2 = Math.imul(h2 + str.charCodeAt(i), 0x85ebca6b) ^ (h2 >>> 13);
+  }
+  return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36) + '.' + str.length.toString(36);
+}
+
+function normalizeMainBg(raw) {
+  const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  const cfg = Object.assign({}, MAIN_BG_DEFAULTS);
+  Object.keys(SIDEBAR_RANGES).forEach(k => {
+    if (!(k in MAIN_BG_DEFAULTS)) return;          // `width` is the sidebar's alone
+    const [lo, hi] = SIDEBAR_RANGES[k];
+    const step = SIDEBAR_STEPS[k] || 1;
+    const n = (src[k] === null || src[k] === undefined) ? NaN : Number(src[k]);
+    cfg[k] = Number.isFinite(n)
+      ? Math.min(hi, Math.max(lo, Math.round(n / step) * step))
+      : MAIN_BG_DEFAULTS[k];
+  });
+  cfg.wall = (src.wall === 'custom' || WALLPAPERS.some(w => w.id === src.wall)) ? src.wall : MAIN_BG_DEFAULTS.wall;
+  // Same guard as the sidebar's: a synced prefs blob is untrusted, and this string
+  // goes straight into a CSS url().
+  cfg.custom = (typeof src.custom === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(src.custom))
+    ? src.custom : '';
+  // Derived, never trusted from input: it must describe the image actually present.
+  cfg.customId = customFingerprint(cfg.custom);
+  return cfg;
+}
+
+// Written to :root rather than to each surface, because two elements read them — the
+// home screen is a body-level overlay, the note area lives inside the shell.
+function applyMainBg(cfg) {
+  const c = normalizeMainBg(cfg);
+  const wall = c.wall === 'custom' && c.custom
+    ? { css: `url("${c.custom}")` }
+    : (WALLPAPERS.find(w => w.id === c.wall) || WALLPAPERS[0]);
+  const root = document.documentElement.style;
+  root.setProperty('--mb-img',     wall.css);
+  root.setProperty('--mb-opacity', c.wall === 'none' ? '0' : String(c.opacity / 100));
+  root.setProperty('--mb-blur',    c.blur + 'px');
+  root.setProperty('--mb-bright',  String(c.bright / 100));
+  root.setProperty('--mb-sat',     String(c.sat / 100));
+  root.setProperty('--mb-scrim',   c.wall === 'none' ? '0' : String(c.scrim / 100));
+  root.setProperty('--mb-pos',     c.posX + '% ' + c.posY + '%');
+  return c;
+}
+
+function loadMainBg() {
+  return normalizeMainBg(loadPrefs().mainBg);
+}
+
+function saveMainBg(patch) {
+  const cfg = normalizeMainBg(Object.assign(loadMainBg(), patch));
+  try {
+    const prefs = loadPrefs();
+    prefs.mainBg = cfg;
+    localStorage.setItem(PREFS_KEY, JSON.stringify(Object.assign(prefs, { t: Date.now() })));
+  } catch (e) { /* storage unavailable — the background stays session-only */ }
+  applyMainBg(cfg);
+  pushNow();
+  return cfg;
+}
 
 // Text sizing. Deliberately NOT part of the sidebar config: that one is the
 // wallpaper, and "reset background" is derived from it — folding font size in there
@@ -248,6 +335,10 @@ let tablineEl, tabsEl, paletteBars;
 let barSaveTimer = null;
 let textSaveTimer = null;   // separate from barSaveTimer so the two bar groups don't
                             // cancel each other's debounced save
+let mainBgSaveTimer = null; // and again per surface: dragging a sidebar bar, switching
+                            // target, then dragging a main bar inside 250ms used to
+                            // cancel the sidebar's pending write while leaving its live
+                            // preview on screen — saved and visible silently diverge
 let nextFolderParent = null;   // folder the /newFolder prompt should nest under
 let selectCurrentOnce = false;  // one-shot: open a list on its current value
 let renameTarget = null;       // nid being renamed by the /rename prompt
@@ -258,6 +349,7 @@ let openTabs = [];          // [nid] of notes in the tabline; the active one is 
 // The sidebar wallpaper is up to 120KB of base64 and changes about twice a year,
 // while pushNow runs every couple of seconds. Only ship it when it moved.
 let sidebarImageDirty = false;
+let bgTarget = 'side';   // which surface /settings' background picker is driving
 
 // ── State encode / decode ─────────────────────────────────────────────────────
 function encodeState(state) {
@@ -797,6 +889,25 @@ async function syncPull() {
     // business inside a blob rewritten on every theme change. Put it back where
     // normalizeSidebarCfg expects to find it before anything reads prefs.
     const incoming = Object.assign({}, data.prefs, { folders: loadFolders() });
+    // The server never stores this image, so an incoming mainBg always has custom: ''.
+    // Adopting that blindly would erase the picture on the device that set it.
+    if (incoming.mainBg) {
+      const localCustom = (localPrefs.mainBg && localPrefs.mainBg.custom) || '';
+      const localId = customFingerprint(localCustom);
+      incoming.mainBg = Object.assign({}, incoming.mainBg, { custom: localCustom, customId: localId });
+      // A 'custom' wall is only meaningful if THIS device holds the image it refers to.
+      // Without the fingerprint check, a device with its own uploaded picture would
+      // pair that picture with another device's marker and settings — showing the
+      // wrong photo under someone else's scrim, with nothing to indicate a swap.
+      // Both conditions, not just the fingerprint: a payload claiming
+      // `wall: 'custom', customId: ''` against a device that also has no image makes
+      // '' !== '' false, so a fingerprint-only check would leave the wall set to
+      // custom with nothing behind it — the scrim then renders over blank page.
+      if (data.prefs.mainBg.wall === 'custom' &&
+          (!localCustom || data.prefs.mainBg.customId !== localId)) {
+        incoming.mainBg.wall = 'none';
+      }
+    }
     if (data.sidebarImage) {
       const sb = (incoming.sidebar && typeof incoming.sidebar === 'object') ? incoming.sidebar : {};
       incoming.sidebar = Object.assign({}, sb, { custom: data.sidebarImage });
@@ -816,6 +927,7 @@ async function syncPull() {
     // always applies live — pulled through normalizeSidebarCfg since a remote
     // config must never reach a CSS property unvalidated.
     if (data.prefs.sidebar) applySidebarCfg(normalizeSidebarCfg(data.prefs.sidebar));
+    if (data.prefs.mainBg)  applyMainBg(data.prefs.mainBg);
   }
   if (emptyVisible) renderRecent();
   renderSidebar();
@@ -828,6 +940,19 @@ function pushNow() {
 
   const prefs = loadPrefs();
   const pending = loadPending();
+  // The uploaded home/notes image is device-local: it is stripped server-side (it would
+  // blow user_prefs' 32KB budget and take theme, font, folders and tabs down with it),
+  // so shipping it on a push that fires every two seconds is pure waste. The sidebar's
+  // equivalent travels in its own `sidebarImage` field with a dirty flag; this one has
+  // no column yet, so it simply stays put.
+  if (prefs.mainBg && prefs.mainBg.custom) {
+    // The fingerprint stays — it is what tells another device whether the 'custom'
+    // wall it is being told about refers to a picture that device actually has.
+    prefs.mainBg = Object.assign({}, prefs.mainBg, {
+      custom: '',
+      customId: customFingerprint(prefs.mainBg.custom),
+    });
+  }
   const body = {
     notes:          loadSnapshots().map(snapshotToWireNote).filter(Boolean),
     // Deliberate creations only. Notes can safely be re-sent in full because their
@@ -1469,6 +1594,7 @@ function openPalette(mode, opts = {}) {
   const isFloat = mode === 'settings' || mode === 'help';
   paletteEl.classList.toggle('float', isFloat);
   paletteEl.dataset.title = isFloat ? mode : '';
+  if (mode === 'settings' && !opts.keep) bgTarget = 'side';
   renderSidebarBars(mode === 'settings');
   positionPalette();
   paletteSearch.focus();
@@ -2364,8 +2490,11 @@ function renderSidebarBars(show) {
   if (!paletteBars) return;
   paletteBars.classList.toggle('hidden', !show);
   if (!show) { paletteBars.innerHTML = ''; return; }
-  const cfg = normalizeSidebarCfg(loadPrefs().sidebar);
   const text = loadTextCfg();
+  // One picker for both surfaces. Three stacked copies of a twenty-swatch grid would
+  // be three screens of scrolling and three places to look for the same control.
+  const onSide = bgTarget === 'side';
+  const cfg = onSide ? normalizeSidebarCfg(loadPrefs().sidebar) : loadMainBg();
   paletteBars.innerHTML =
     // Text size first: it sits directly under the sidebar toggle, which is what the
     // panel is mostly about, and it is the control people reach for most often.
@@ -2382,6 +2511,14 @@ function renderSidebarBars(show) {
     // Swatches, not list rows: you pick a background by looking at it. `none` gets a
     // checkerboard so "off" is visibly different from "a very dark wallpaper".
     `<div class="pal-sect">background</div>` +
+    // The home screen and the note area share one setting: they occupy the same region
+    // and are never visible at once, so splitting them would be a distinction nobody
+    // could observe.
+    `<div class="pal-target" role="group" aria-label="which surface">` +
+      [{ id: 'side', label: 'side panel' }, { id: 'main', label: 'home & notes' }].map(t =>
+        `<button class="pal-tgt${bgTarget === t.id ? ' on' : ''}" data-bgtarget="${t.id}"
+                 aria-pressed="${bgTarget === t.id}">${t.label}</button>`).join('') +
+    `</div>` +
     `<div class="pal-swatches">` +
       WALLPAPERS.map(w => {
         const img = w.id === 'none'
@@ -2444,13 +2581,22 @@ function onSidebarBarInput(e) {
   const input = e.target.closest('[data-bar]');
   if (!input) return;
   const key = input.dataset.bar;
-  const cfg = normalizeSidebarCfg(readBars('[data-bar]', normalizeSidebarCfg(loadPrefs().sidebar)));
+  const onSide = bgTarget === 'side';
+  const base = onSide ? normalizeSidebarCfg(loadPrefs().sidebar) : loadMainBg();
+  const cfg = onSide
+    ? normalizeSidebarCfg(readBars('[data-bar]', base))
+    : normalizeMainBg(readBars('[data-bar]', base));
   const unit = (SIDEBAR_BARS.find(b => b.key === key) || {}).unit || '';
   const out = document.getElementById('po-' + key);
   if (out) out.textContent = input.value + unit;
-  applySidebarCfg(cfg);                        // preview only
-  clearTimeout(barSaveTimer);
-  barSaveTimer = setTimeout(() => saveSidebarCfg(cfg), 250);
+  if (onSide) applySidebarCfg(cfg); else applyMainBg(cfg);   // preview only
+  if (onSide) {
+    clearTimeout(barSaveTimer);
+    barSaveTimer = setTimeout(() => saveSidebarCfg(cfg), 250);
+  } else {
+    clearTimeout(mainBgSaveTimer);
+    mainBgSaveTimer = setTimeout(() => saveMainBg(cfg), 250);
+  }
 }
 
 // Read an image from disk, downscale it hard, and keep it in prefs so it syncs
@@ -2487,7 +2633,8 @@ function pickSidebarImage() {
         // 200KB) rather than competing with notes for one shared payload — but keep
         // the client cap well under it, since this is a background, not the content.
         if (data.length > 120000) return flashCopied('image too detailed to store — try a simpler one');
-        saveSidebarCfg({ custom: data, wall: 'custom' });
+        if (bgTarget === 'side') saveSidebarCfg({ custom: data, wall: 'custom' });
+        else                     saveMainBg({ custom: data, wall: 'custom' });
         renderSidebarBars(true);
         flashCopied('background set from your image');
       };
@@ -3475,12 +3622,19 @@ function attachEvents() {
   paletteBars.addEventListener('input', onSidebarBarInput);
   paletteBars.addEventListener('input', onTextBarInput);
   paletteBars.addEventListener('click', (e) => {
+    const tgt = e.target.closest('[data-bgtarget]');
+    if (tgt) {
+      bgTarget = tgt.dataset.bgtarget;
+      renderSidebarBars(true);        // the sliders below now belong to the other surface
+      paletteBars.querySelector(`[data-bgtarget="${bgTarget}"]`)?.focus();
+      return;
+    }
     if (e.target.closest('[data-upload]')) return pickSidebarImage();
     const sw = e.target.closest('[data-wall]');
     if (!sw) return;
     const wall = sw.dataset.wall;
     const hadFocus = document.activeElement === sw;
-    saveSidebarCfg({ wall });
+    if (bgTarget === 'side') saveSidebarCfg({ wall }); else saveMainBg({ wall });
     renderSidebarBars(true);          // repaint so the ✓ moves to the new swatch
     // The repaint replaces innerHTML, so the button that was just activated no longer
     // exists — and with it goes focus, leaving the arrow keys dead after a keyboard
@@ -3498,7 +3652,7 @@ function attachEvents() {
   // special case, because stepping through sixteen wallpapers one at a time with ↓
   // would be worse than useless.
   function settingsChain() {
-    return [...paletteBars.querySelectorAll('.pal-swatch, .pal-bar input')];
+    return [...paletteBars.querySelectorAll('.pal-tgt, .pal-swatch, .pal-bar input')];
   }
 
   function swatchesPerRow() {
@@ -3509,9 +3663,10 @@ function attachEvents() {
   }
 
   paletteBars.addEventListener('keydown', (e) => {
-    const el = e.target.closest('.pal-swatch, .pal-bar input');
+    const el = e.target.closest('.pal-tgt, .pal-swatch, .pal-bar input');
     if (!el) return;
     const isBar = !!el.closest('.pal-bar');
+    const isTgt = el.classList.contains('pal-tgt');
 
     // ←/→ on a slider is the slider's own business — that is the whole point of a
     // dragger you can also nudge.
@@ -3528,8 +3683,8 @@ function attachEvents() {
     }
 
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      const swatches = [...paletteBars.querySelectorAll('.pal-swatch')];
-      const next = swatches[swatches.indexOf(el) + (e.key === 'ArrowLeft' ? -1 : 1)];
+      const peers = [...paletteBars.querySelectorAll(isTgt ? '.pal-tgt' : '.pal-swatch')];
+      const next = peers[peers.indexOf(el) + (e.key === 'ArrowLeft' ? -1 : 1)];
       if (next) { e.preventDefault(); e.stopPropagation(); next.focus(); }
       return;
     }
@@ -3539,7 +3694,7 @@ function attachEvents() {
     const down = e.key === 'ArrowDown';
 
     // Within the grid, ↑/↓ move a whole row — matching what the eye expects.
-    if (!isBar) {
+    if (!isBar && !isTgt) {
       const swatches = [...paletteBars.querySelectorAll('.pal-swatch')];
       const target = swatches.indexOf(el) + (down ? swatchesPerRow() : -swatchesPerRow());
       if (target >= 0 && target < swatches.length) return swatches[target].focus();
@@ -4095,6 +4250,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // restores the panel's open/closed state; this at least lands with the rest of the
   // boot prefs rather than after the first interaction.
   applyTextCfg(loadTextCfg());
+  applyMainBg(loadMainBg());
 
   if (syncKey) syncPull().catch(() => {});
 });
@@ -4166,6 +4322,7 @@ if (typeof module !== 'undefined') {
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
     normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS, SIDEBAR_STEPS,
+    normalizeMainBg, MAIN_BG_DEFAULTS, customFingerprint,
     normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
     snapshotToWireNote, wireNoteToSnapshot,

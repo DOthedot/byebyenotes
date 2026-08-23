@@ -295,3 +295,73 @@ describe('prefs numbers — the other tail of the exponent', () => {
     expect(store.sanitizePrefs({ t: 1, wall: null })).toEqual({ t: 1, wall: null });
   });
 });
+
+describe('uploaded wallpapers must never reach the prefs blob', () => {
+  const img = 'data:image/jpeg;base64,' + 'A'.repeat(118000);
+
+  test('a home/notes image is stripped, exactly like the sidebar one', () => {
+    // It used to be stripped for `sidebar` by name, so `mainBg` — added later —
+    // reintroduced the identical bug: prefs blew the 32KB column budget, sanitizePrefs
+    // returned null, api/sync.js skipped the write and still answered 200. Theme, font,
+    // folders and tabs then stopped syncing, silently and indefinitely.
+    const out = store.sanitizePrefs({ t: 1, theme: 'mocha', mainBg: { wall: 'custom', custom: img } });
+    expect(out).not.toBeNull();
+    expect(out.mainBg.custom).toBeUndefined();
+    expect(out.theme).toBe('mocha');            // the rest of prefs survives
+  });
+
+  test('both surfaces at once still fit', () => {
+    const out = store.sanitizePrefs({
+      t: 1, theme: 'mocha',
+      sidebar: { wall: 'custom', custom: img },
+      mainBg:  { wall: 'custom', custom: img },
+    });
+    expect(out).not.toBeNull();
+    expect(out.sidebar.custom).toBeUndefined();
+    expect(out.mainBg.custom).toBeUndefined();
+  });
+
+  test('stripping is by shape, so a future surface cannot repeat this', () => {
+    const out = store.sanitizePrefs({ t: 1, someNewPanel: { wall: 'custom', custom: img } });
+    expect(out).not.toBeNull();
+    expect(out.someNewPanel.custom).toBeUndefined();
+  });
+
+  test('the surface’s other settings are kept', () => {
+    const out = store.sanitizePrefs({ t: 1, mainBg: { wall: 'valley', opacity: 40, scrim: 70, custom: img } });
+    expect(out.mainBg).toEqual({ wall: 'valley', opacity: 40, scrim: 70 });
+  });
+
+  test('a non-object or array field is left alone', () => {
+    const out = store.sanitizePrefs({ t: 1, folders: ['Work'], tabs: ['a'], theme: 'mocha' });
+    expect(out.folders).toEqual(['Work']);
+    expect(out.tabs).toEqual(['a']);
+  });
+});
+
+describe('the strip fires on the key, not on its type', () => {
+  const big = 'x'.repeat(40000);
+
+  // This exact bug shape has now appeared twice: first because the strip named one
+  // field (`sidebar`) and missed `mainBg`, then because the shape check required a
+  // string and missed everything else. Both times the symptom was identical — prefs
+  // over budget, sanitizePrefs returns null, api/sync.js skips the write and answers
+  // 200, and every preference silently stops syncing. Pinned so there is no third.
+  test.each([
+    ['object', { nested: big }],
+    ['array',  [big]],
+    ['number', 12345],
+    ['null',   null],
+    ['true',   true],
+  ])('a %s custom value is stripped, not passed through', (_label, value) => {
+    const out = store.sanitizePrefs({ t: 1, theme: 'mocha', mainBg: { wall: 'custom', custom: value } });
+    expect(out).not.toBeNull();
+    expect(out.mainBg.custom).toBeUndefined();
+    expect(out.theme).toBe('mocha');
+  });
+
+  test('an object without a custom key is untouched', () => {
+    const out = store.sanitizePrefs({ t: 1, mainBg: { wall: 'valley', scrim: 70 } });
+    expect(out.mainBg).toEqual({ wall: 'valley', scrim: 70 });
+  });
+});

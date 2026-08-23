@@ -254,3 +254,104 @@ describe('blur steps in halves', () => {
     expect(normalizeSidebarCfg({ width: 300.5 }).width).toBe(301);
   });
 });
+
+describe('normalizeMainBg — the home screen and note background', () => {
+  const { normalizeMainBg, MAIN_BG_DEFAULTS, WALLPAPERS } = mod;
+
+  test('defaults to no image, so nothing changes until someone picks one', () => {
+    for (const bad of [undefined, null, {}, 'nope', 42, []]) {
+      expect(normalizeMainBg(bad)).toEqual(MAIN_BG_DEFAULTS);
+    }
+    expect(MAIN_BG_DEFAULTS.wall).toBe('none');
+  });
+
+  test('defaults are gentler than the sidebar’s — this is a surface you write on', () => {
+    // Dim text (checked list items, comments) is what disappears first over a busy
+    // image, so the note surface starts with a heavier scrim and lower brightness.
+    expect(MAIN_BG_DEFAULTS.scrim).toBeGreaterThan(mod.SIDEBAR_DEFAULTS.scrim);
+    expect(MAIN_BG_DEFAULTS.bright).toBeLessThan(mod.SIDEBAR_DEFAULTS.bright);
+  });
+
+  test('values are clamped to the shared ranges', () => {
+    const big = normalizeMainBg({ opacity: 900, blur: -5, bright: 0, sat: 9999, scrim: -1 });
+    expect(big.opacity).toBe(100);
+    expect(big.blur).toBe(0);
+    expect(big.bright).toBe(30);
+    expect(big.sat).toBe(200);
+    expect(big.scrim).toBe(0);
+  });
+
+  test('blur keeps its half-steps here too', () => {
+    expect(normalizeMainBg({ blur: 1.5 }).blur).toBe(1.5);
+    expect(normalizeMainBg({ blur: 1.26 }).blur).toBe(1.5);
+  });
+
+  test('an unknown wallpaper id degrades to none', () => {
+    expect(normalizeMainBg({ wall: 'aurora' }).wall).toBe('none');
+    expect(normalizeMainBg({ wall: '../../etc/passwd' }).wall).toBe('none');
+  });
+
+  test('every real wallpaper is accepted', () => {
+    for (const w of WALLPAPERS) expect(normalizeMainBg({ wall: w.id }).wall).toBe(w.id);
+  });
+
+  test('a custom image must be a data URI we could have produced', () => {
+    // Same guard as the sidebar's: this string goes straight into a CSS url(), and a
+    // synced prefs blob is untrusted input.
+    expect(normalizeMainBg({ custom: 'data:image/jpeg;base64,AAAA' }).custom)
+      .toBe('data:image/jpeg;base64,AAAA');
+    expect(normalizeMainBg({ custom: 'https://example.com/x.png' }).custom).toBe('');
+    expect(normalizeMainBg({ custom: 'javascript:alert(1)' }).custom).toBe('');
+    expect(normalizeMainBg({ custom: `url(x);background:url(evil)` }).custom).toBe('');
+  });
+
+  test('it does not carry the sidebar-only width', () => {
+    // width sizes a grid column and belongs to the panel alone; leaking it here would
+    // put a meaningless key in prefs and in every sync payload.
+    expect(normalizeMainBg({ width: 400 })).not.toHaveProperty('width');
+  });
+});
+
+test('the valley wallpaper is registered and is the light one', () => {
+  expect(mod.WALLPAPERS.find(w => w.id === 'valley')).toBeTruthy();
+});
+
+describe('custom image fingerprint', () => {
+  const { customFingerprint, normalizeMainBg } = mod;
+  const a = 'data:image/jpeg;base64,' + 'A'.repeat(2000);
+  const b = 'data:image/jpeg;base64,' + 'B'.repeat(2000);
+
+  test('the same image fingerprints the same', () => {
+    expect(customFingerprint(a)).toBe(customFingerprint(a));
+  });
+
+  test('different images of identical length differ', () => {
+    // Length alone would collide here, which is the case that matters: two devices
+    // that each uploaded a photo at the same JPEG budget.
+    expect(a.length).toBe(b.length);
+    expect(customFingerprint(a)).not.toBe(customFingerprint(b));
+  });
+
+  test('a single changed byte changes it', () => {
+    expect(customFingerprint(a)).not.toBe(customFingerprint(a.slice(0, -1) + 'B'));
+  });
+
+  test('no image means no fingerprint', () => {
+    expect(customFingerprint('')).toBe('');
+    expect(customFingerprint(null)).toBe('');
+    expect(customFingerprint(undefined)).toBe('');
+  });
+
+  test('it is derived from the image, never taken from input', () => {
+    // A synced blob could otherwise claim any fingerprint it liked and make another
+    // device adopt a 'custom' wall for a picture it does not have.
+    const cfg = normalizeMainBg({ custom: a, customId: 'lies' });
+    expect(cfg.customId).toBe(customFingerprint(a));
+  });
+
+  test('a rejected image leaves an empty fingerprint, not a stale one', () => {
+    const cfg = normalizeMainBg({ custom: 'https://example.com/x.png', customId: 'stale' });
+    expect(cfg.custom).toBe('');
+    expect(cfg.customId).toBe('');
+  });
+});
