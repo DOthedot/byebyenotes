@@ -36,8 +36,10 @@ authorship regardless of how they were made. Nothing here has been cleared.
 
 Options, least to most infrastructure:
 
-1. **Ship only generated CSS art.** The other eight presets in `WALLPAPERS` are
-   gradients of ~200 bytes each — no rights question, no hosting, works offline.
+1. **Ship only generated CSS art.** `terminal` and `starfield` in `WALLPAPERS` are
+   pure CSS of ~200 bytes each — no rights question, no hosting, works offline.
+   (The five colour-wash gradients that used to sit alongside them — dusk, aurora,
+   sakura, ember, deep sea — were removed at the user's request.)
 2. **Let the user supply an image URL.** Any picture they want, one text field.
    Breaks when the remote host does, and leaks a request to a third party.
 3. **Upload through `/api/img`.** Closest to the intended look, but that endpoint is

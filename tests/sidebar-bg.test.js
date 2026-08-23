@@ -191,3 +191,66 @@ describe('sidebar width — the panel is resizable, so the value is user-driven'
     expect(SIDEBAR_LOOK_DEFAULTS).not.toHaveProperty('custom');
   });
 });
+
+describe('a wallpaper id that no longer exists', () => {
+  const { normalizeSidebarCfg, SIDEBAR_DEFAULTS, WALLPAPERS } = mod;
+
+  test('a removed preset falls back to the default rather than breaking', () => {
+    // dusk/aurora/sakura/ember/abyss were removed from the picker. Anyone who had one
+    // selected still has that id in prefs — and on another device, in synced prefs —
+    // so it must degrade to "none" instead of leaving --sb-img pointing at nothing.
+    for (const gone of ['dusk', 'aurora', 'sakura', 'ember', 'abyss']) {
+      expect(normalizeSidebarCfg({ wall: gone }).wall).toBe(SIDEBAR_DEFAULTS.wall);
+    }
+  });
+
+  test('the removed presets really are gone from the picker', () => {
+    const ids = WALLPAPERS.map(w => w.id);
+    for (const gone of ['dusk', 'aurora', 'sakura', 'ember', 'abyss']) {
+      expect(ids).not.toContain(gone);
+    }
+  });
+
+  test('the CSS-art presets that were kept still work', () => {
+    expect(normalizeSidebarCfg({ wall: 'grid' }).wall).toBe('grid');
+    expect(normalizeSidebarCfg({ wall: 'stars' }).wall).toBe('stars');
+  });
+
+  test('an uploaded image is still accepted — it is not in WALLPAPERS by design', () => {
+    expect(normalizeSidebarCfg({ wall: 'custom' }).wall).toBe('custom');
+  });
+});
+
+describe('blur steps in halves', () => {
+  const { normalizeSidebarCfg, SIDEBAR_STEPS } = mod;
+
+  test('blur is the one bar with a half step', () => {
+    expect(SIDEBAR_STEPS.blur).toBe(0.5);
+    expect(SIDEBAR_STEPS.opacity).toBeUndefined();   // percentages stay whole
+  });
+
+  test('a half-pixel blur survives normalisation', () => {
+    // It used to be Math.round()ed away, so 0.5 read back as 1 and the half-steps
+    // were unreachable no matter what the slider did.
+    expect(normalizeSidebarCfg({ blur: 0.5 }).blur).toBe(0.5);
+    expect(normalizeSidebarCfg({ blur: 2.5 }).blur).toBe(2.5);
+  });
+
+  test('values snap to the nearest half, not to the nearest whole', () => {
+    expect(normalizeSidebarCfg({ blur: 0.6 }).blur).toBe(0.5);
+    expect(normalizeSidebarCfg({ blur: 0.8 }).blur).toBe(1);
+    expect(normalizeSidebarCfg({ blur: 1.24 }).blur).toBe(1);
+    expect(normalizeSidebarCfg({ blur: 1.26 }).blur).toBe(1.5);
+  });
+
+  test('the range is still clamped', () => {
+    expect(normalizeSidebarCfg({ blur: -3 }).blur).toBe(0);
+    expect(normalizeSidebarCfg({ blur: 999 }).blur).toBe(24);
+  });
+
+  test('bars without a step still land on whole numbers', () => {
+    expect(normalizeSidebarCfg({ opacity: 45.4 }).opacity).toBe(45);
+    expect(normalizeSidebarCfg({ scrim: 55.6 }).scrim).toBe(56);
+    expect(normalizeSidebarCfg({ width: 300.5 }).width).toBe(301);
+  });
+});

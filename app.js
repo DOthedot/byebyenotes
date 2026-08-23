@@ -128,11 +128,6 @@ const WALLPAPERS = [
   { id: 'barb',   name: 'ceiling',    css: "url('/assets/wall-barberini.jpg')",  photo: true },
   { id: 'vortex', name: 'vortex',     css: "url('/assets/wall-vortex.jpg')",     photo: true },
   { id: 'vishnu', name: 'vishnu',     css: "url('/assets/wall-vishnu.jpg')",     photo: true },
-  { id: 'dusk',   name: 'dusk',       css: 'radial-gradient(120% 80% at 20% 0%,var(--accent-soft),transparent 60%),linear-gradient(200deg,var(--bg-code),var(--bg-page) 70%)' },
-  { id: 'aurora', name: 'aurora',     css: 'radial-gradient(90% 60% at 15% 15%,#94e2d5,transparent 55%),radial-gradient(80% 70% at 85% 45%,#89b4fa,transparent 55%)' },
-  { id: 'sakura', name: 'sakura',     css: 'radial-gradient(70% 50% at 80% 10%,#f5c2e7,transparent 55%),radial-gradient(90% 60% at 10% 70%,#cba6f7,transparent 55%)' },
-  { id: 'ember',  name: 'ember',      css: 'radial-gradient(80% 55% at 25% 90%,#fab387,transparent 55%),radial-gradient(70% 50% at 90% 20%,#f38ba8,transparent 55%)' },
-  { id: 'abyss',  name: 'deep sea',   css: 'radial-gradient(100% 70% at 50% 100%,#74c7ec,transparent 60%)' },
   { id: 'grid',   name: 'terminal',   css: 'repeating-linear-gradient(0deg,var(--accent-line) 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,var(--accent-line) 0 1px,transparent 1px 22px)' },
   { id: 'stars',  name: 'starfield',  css: 'radial-gradient(1.4px 1.4px at 18% 22%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 62% 12%,var(--fg-dim),transparent),radial-gradient(1.6px 1.6px at 38% 62%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 82% 78%,var(--fg-dim),transparent)' },
 ];
@@ -140,6 +135,10 @@ const WALLPAPERS = [
 const SIDEBAR_DEFAULTS = { wall: 'none', opacity: 45, blur: 2, bright: 100, sat: 110, scrim: 55, posX: 50, posY: 50, open: true, custom: '', width: 264 };
 const SIDEBAR_RANGES   = { opacity: [0, 100], blur: [0, 24], bright: [30, 180], sat: [0, 200], scrim: [0, 100], posX: [0, 100], posY: [0, 100], width: [180, 560] };
 const SIDEBAR_POSITIONS = ['top', 'center', 'bottom'];
+// Per-bar granularity. Everything here is a percentage where a whole number is the
+// natural unit — except blur, where the useful range is the bottom few pixels and
+// stepping 0 → 1 → 2 skips straight past "just softened".
+const SIDEBAR_STEPS = { blur: 0.5 };
 // What "reset background" restores — the appearance fields and nothing else. `open`
 // is a deliberate user choice (⌘B / "hide sidebar"), not part of the wallpaper look.
 // "reset background" restores the *look* only. `open` is a panel state, and
@@ -534,8 +533,13 @@ function normalizeSidebarCfg(raw) {
   const cfg = Object.assign({}, SIDEBAR_DEFAULTS);
   Object.keys(SIDEBAR_RANGES).forEach(k => {
     const [lo, hi] = SIDEBAR_RANGES[k];
+    const step = SIDEBAR_STEPS[k] || 1;
     const n = (src[k] === null || src[k] === undefined) ? NaN : Number(src[k]);
-    cfg[k] = Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : SIDEBAR_DEFAULTS[k];
+    // Snap to the bar's own step rather than to whole numbers, or a 0.5px blur would
+    // round away the moment it was read back and the half-steps would be unusable.
+    cfg[k] = Number.isFinite(n)
+      ? Math.min(hi, Math.max(lo, Math.round(n / step) * step))
+      : SIDEBAR_DEFAULTS[k];
   });
   cfg.wall = (src.wall === 'custom' || WALLPAPERS.some(w => w.id === src.wall)) ? src.wall : SIDEBAR_DEFAULTS.wall;
   // A user-supplied image is a data: URI we produced ourselves (canvas → JPEG).
@@ -2401,7 +2405,7 @@ function renderSidebarBars(show) {
       const [lo, hi] = SIDEBAR_RANGES[b.key];
       return `<div class="pal-bar">
         <label for="pb-${b.key}">${b.label}</label>
-        <input id="pb-${b.key}" type="range" min="${lo}" max="${hi}"
+        <input id="pb-${b.key}" type="range" min="${lo}" max="${hi}" step="${SIDEBAR_STEPS[b.key] || 1}"
                value="${cfg[b.key]}" data-bar="${b.key}" />
         <output id="po-${b.key}">${cfg[b.key]}${b.unit}</output>
       </div>`;
@@ -4161,7 +4165,7 @@ if (typeof module !== 'undefined') {
     langIcon, langBadgeHtml, soleLang, fileLabel, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
-    normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS,
+    normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS, SIDEBAR_STEPS,
     normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
     snapshotToWireNote, wireNoteToSnapshot,
