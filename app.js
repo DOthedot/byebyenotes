@@ -110,28 +110,38 @@ const SNAP_MAX       = 30;
 
 // Sidebar background presets. Generated CSS art, not photographs: byebyenotes has
 // no asset pipeline, and a gradient costs ~200 bytes where an image costs hosting.
+// `on` is which surfaces offer each wallpaper. The panel is a tall narrow strip behind
+// file names; the home screen and the note are a wide field behind text you read. The
+// same picture rarely suits both, so the picker shows each surface only what belongs
+// there rather than one list of everything.
 const WALLPAPERS = [
-  { id: 'none',   name: 'none',       css: 'none' },
+  { id: 'none',   name: 'none',       css: 'none', on: ['side', 'main'] },
   // Photographic walls. Absolute paths so they resolve on /s/<id> tiny links too,
   // the same reason index.html loads its assets absolutely (issue #17). Single quotes
   // inside url() are load-bearing: these strings are interpolated into a style="..."
   // attribute by the swatch grid, and a double quote there truncates the attribute.
-  { id: 'glory',  name: 'glory',      css: "url('/assets/wall-glory.jpg')",      photo: true },
-  { id: 'crown',  name: 'coronation', css: "url('/assets/wall-coronation.jpg')", photo: true },
-  { id: 'seraph', name: 'seraph',     css: "url('/assets/wall-seraph.jpg')",     photo: true },
-  { id: 'atlas',  name: 'atlas',      css: "url('/assets/wall-atlas.jpg')",      photo: true },
-  { id: 'trust',  name: 'trust',      css: "url('/assets/wall-trust.jpg')",      photo: true },
-  { id: 'storm',  name: 'storm',      css: "url('/assets/wall-storm.jpg')",      photo: true },
-  { id: 'ruins',  name: 'ruins',      css: "url('/assets/wall-ruins.jpg')",      photo: true },
-  { id: 'knight', name: 'knight',     css: "url('/assets/wall-knight.jpg')",     photo: true },
-  { id: 'apoth',  name: 'apotheosis', css: "url('/assets/wall-apotheosis.jpg')", photo: true },
-  { id: 'barb',   name: 'ceiling',    css: "url('/assets/wall-barberini.jpg')",  photo: true },
-  { id: 'vortex', name: 'vortex',     css: "url('/assets/wall-vortex.jpg')",     photo: true },
-  { id: 'vishnu', name: 'vishnu',     css: "url('/assets/wall-vishnu.jpg')",     photo: true },
-  { id: 'valley', name: 'valley',     css: "url('/assets/wall-valley.jpg')",     photo: true },
-  { id: 'grid',   name: 'terminal',   css: 'repeating-linear-gradient(0deg,var(--accent-line) 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,var(--accent-line) 0 1px,transparent 1px 22px)' },
-  { id: 'stars',  name: 'starfield',  css: 'radial-gradient(1.4px 1.4px at 18% 22%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 62% 12%,var(--fg-dim),transparent),radial-gradient(1.6px 1.6px at 38% 62%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 82% 78%,var(--fg-dim),transparent)' },
+  { id: 'glory',  name: 'glory',      css: "url('/assets/wall-glory.jpg')",      photo: true, on: ['side'] },
+  { id: 'crown',  name: 'coronation', css: "url('/assets/wall-coronation.jpg')", photo: true, on: ['side'] },
+  { id: 'seraph', name: 'seraph',     css: "url('/assets/wall-seraph.jpg')",     photo: true, on: ['side'] },
+  { id: 'atlas',  name: 'atlas',      css: "url('/assets/wall-atlas.jpg')",      photo: true, on: ['side'] },
+  { id: 'trust',  name: 'trust',      css: "url('/assets/wall-trust.jpg')",      photo: true, on: ['side'] },
+  { id: 'storm',  name: 'storm',      css: "url('/assets/wall-storm.jpg')",      photo: true, on: ['side'] },
+  { id: 'ruins',  name: 'ruins',      css: "url('/assets/wall-ruins.jpg')",      photo: true, on: ['side'] },
+  { id: 'knight', name: 'knight',     css: "url('/assets/wall-knight.jpg')",     photo: true, on: ['side'] },
+  { id: 'apoth',  name: 'apotheosis', css: "url('/assets/wall-apotheosis.jpg')", photo: true, on: ['side'] },
+  { id: 'barb',   name: 'ceiling',    css: "url('/assets/wall-barberini.jpg')",  photo: true, on: ['side'] },
+  { id: 'vortex', name: 'vortex',     css: "url('/assets/wall-vortex.jpg')",     photo: true, on: ['main'] },
+  { id: 'vishnu', name: 'vishnu',     css: "url('/assets/wall-vishnu.jpg')",     photo: true, on: ['side'] },
+  { id: 'valley', name: 'valley',     css: "url('/assets/wall-valley.jpg')",     photo: true, on: ['main'] },
+  { id: 'grid',   name: 'terminal',   css: 'repeating-linear-gradient(0deg,var(--accent-line) 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,var(--accent-line) 0 1px,transparent 1px 22px)', on: ['side'] },
+  { id: 'stars',  name: 'starfield',  css: 'radial-gradient(1.4px 1.4px at 18% 22%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 62% 12%,var(--fg-dim),transparent),radial-gradient(1.6px 1.6px at 38% 62%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 82% 78%,var(--fg-dim),transparent)', on: ['side'] },
 ];
+
+// Falls back to offering a wallpaper everywhere if it never declared a surface, so a
+// new entry shows up rather than silently vanishing from both pickers.
+function wallpapersFor(surface) {
+  return WALLPAPERS.filter(w => !Array.isArray(w.on) || w.on.includes(surface));
+}
 
 const SIDEBAR_DEFAULTS = { wall: 'none', opacity: 45, blur: 2, bright: 100, sat: 110, scrim: 55, posX: 50, posY: 50, open: true, custom: '', width: 264 };
 const SIDEBAR_RANGES   = { opacity: [0, 100], blur: [0, 24], bright: [30, 180], sat: [0, 200], scrim: [0, 100], posX: [0, 100], posY: [0, 100], width: [180, 560] };
@@ -196,7 +206,11 @@ function normalizeMainBg(raw) {
       ? Math.min(hi, Math.max(lo, Math.round(n / step) * step))
       : MAIN_BG_DEFAULTS[k];
   });
-  cfg.wall = (src.wall === 'custom' || WALLPAPERS.some(w => w.id === src.wall)) ? src.wall : MAIN_BG_DEFAULTS.wall;
+  // Validated against this surface's own list: a value that is legal for the panel is
+  // not automatically legal here, and a stale one (from an older build, or synced from
+  // a device on a different version) must degrade rather than render an odd choice.
+  cfg.wall = (src.wall === 'custom' || wallpapersFor('main').some(w => w.id === src.wall))
+    ? src.wall : MAIN_BG_DEFAULTS.wall;
   // Same guard as the sidebar's: a synced prefs blob is untrusted, and this string
   // goes straight into a CSS url().
   cfg.custom = (typeof src.custom === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(src.custom))
@@ -633,7 +647,8 @@ function normalizeSidebarCfg(raw) {
       ? Math.min(hi, Math.max(lo, Math.round(n / step) * step))
       : SIDEBAR_DEFAULTS[k];
   });
-  cfg.wall = (src.wall === 'custom' || WALLPAPERS.some(w => w.id === src.wall)) ? src.wall : SIDEBAR_DEFAULTS.wall;
+  cfg.wall = (src.wall === 'custom' || wallpapersFor('side').some(w => w.id === src.wall))
+    ? src.wall : SIDEBAR_DEFAULTS.wall;
   // A user-supplied image is a data: URI we produced ourselves (canvas → JPEG).
   // Accept only that shape — a synced prefs blob is untrusted input, and anything
   // else here would end up inside a CSS url().
@@ -2520,7 +2535,7 @@ function renderSidebarBars(show) {
                  aria-pressed="${bgTarget === t.id}">${t.label}</button>`).join('') +
     `</div>` +
     `<div class="pal-swatches">` +
-      WALLPAPERS.map(w => {
+      wallpapersFor(bgTarget).map(w => {
         const img = w.id === 'none'
           ? 'repeating-linear-gradient(45deg,var(--border) 0 6px,var(--bg-code) 6px 12px)'
           : w.css;
@@ -4322,7 +4337,7 @@ if (typeof module !== 'undefined') {
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
     normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS, SIDEBAR_STEPS,
-    normalizeMainBg, MAIN_BG_DEFAULTS, customFingerprint,
+    normalizeMainBg, MAIN_BG_DEFAULTS, customFingerprint, wallpapersFor,
     normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
     snapshotToWireNote, wireNoteToSnapshot,

@@ -291,8 +291,12 @@ describe('normalizeMainBg — the home screen and note background', () => {
     expect(normalizeMainBg({ wall: '../../etc/passwd' }).wall).toBe('none');
   });
 
-  test('every real wallpaper is accepted', () => {
-    for (const w of WALLPAPERS) expect(normalizeMainBg({ wall: w.id }).wall).toBe(w.id);
+  test('every wallpaper this surface offers is accepted', () => {
+    // Was "every wallpaper" — true until each surface got its own list. The narrower
+    // assertion is the real contract now: see the per-surface suite below.
+    for (const w of mod.wallpapersFor('main')) {
+      expect(normalizeMainBg({ wall: w.id }).wall).toBe(w.id);
+    }
   });
 
   test('a custom image must be a data URI we could have produced', () => {
@@ -353,5 +357,53 @@ describe('custom image fingerprint', () => {
     const cfg = normalizeMainBg({ custom: 'https://example.com/x.png', customId: 'stale' });
     expect(cfg.custom).toBe('');
     expect(cfg.customId).toBe('');
+  });
+});
+
+describe('each surface offers its own wallpapers', () => {
+  const { wallpapersFor, normalizeSidebarCfg, normalizeMainBg, SIDEBAR_DEFAULTS, MAIN_BG_DEFAULTS } = mod;
+  const ids = (surface) => wallpapersFor(surface).map(w => w.id);
+
+  test('the side panel offers everything except vortex and valley', () => {
+    expect(ids('side')).not.toContain('vortex');
+    expect(ids('side')).not.toContain('valley');
+    expect(ids('side')).toEqual(expect.arrayContaining(['glory', 'storm', 'knight', 'grid', 'stars']));
+  });
+
+  test('home & notes offers only vortex and valley', () => {
+    expect(ids('main').filter(id => id !== 'none')).toEqual(['vortex', 'valley']);
+  });
+
+  test('both offer "none", or there would be no way to turn a background off', () => {
+    expect(ids('side')).toContain('none');
+    expect(ids('main')).toContain('none');
+  });
+
+  test('a wallpaper the surface does not offer is rejected, not rendered', () => {
+    // Reachable from an older build or a device on a different version, via sync.
+    expect(normalizeMainBg({ wall: 'storm' }).wall).toBe(MAIN_BG_DEFAULTS.wall);
+    expect(normalizeSidebarCfg({ wall: 'valley' }).wall).toBe(SIDEBAR_DEFAULTS.wall);
+  });
+
+  test('each surface still accepts its own', () => {
+    expect(normalizeMainBg({ wall: 'valley' }).wall).toBe('valley');
+    expect(normalizeMainBg({ wall: 'vortex' }).wall).toBe('vortex');
+    expect(normalizeSidebarCfg({ wall: 'storm' }).wall).toBe('storm');
+  });
+
+  test('an uploaded image is allowed on both — it is not in the list', () => {
+    expect(normalizeMainBg({ wall: 'custom', custom: 'data:image/jpeg;base64,AAAA' }).wall).toBe('custom');
+    expect(normalizeSidebarCfg({ wall: 'custom', custom: 'data:image/jpeg;base64,AAAA' }).wall).toBe('custom');
+  });
+
+  test('a wallpaper with no `on` declared is offered everywhere', () => {
+    // Guards the failure mode where adding an entry and forgetting the field makes it
+    // invisible in both pickers with no error.
+    const { WALLPAPERS } = mod;
+    const undeclared = WALLPAPERS.filter(w => !Array.isArray(w.on));
+    for (const w of undeclared) {
+      expect(ids('side')).toContain(w.id);
+      expect(ids('main')).toContain(w.id);
+    }
   });
 });
