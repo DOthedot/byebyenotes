@@ -121,6 +121,13 @@ const WALLPAPERS = [
   { id: 'seraph', name: 'seraph',     css: "url('/assets/wall-seraph.jpg')",     photo: true },
   { id: 'atlas',  name: 'atlas',      css: "url('/assets/wall-atlas.jpg')",      photo: true },
   { id: 'trust',  name: 'trust',      css: "url('/assets/wall-trust.jpg')",      photo: true },
+  { id: 'storm',  name: 'storm',      css: "url('/assets/wall-storm.jpg')",      photo: true },
+  { id: 'ruins',  name: 'ruins',      css: "url('/assets/wall-ruins.jpg')",      photo: true },
+  { id: 'knight', name: 'knight',     css: "url('/assets/wall-knight.jpg')",     photo: true },
+  { id: 'apoth',  name: 'apotheosis', css: "url('/assets/wall-apotheosis.jpg')", photo: true },
+  { id: 'barb',   name: 'ceiling',    css: "url('/assets/wall-barberini.jpg')",  photo: true },
+  { id: 'vortex', name: 'vortex',     css: "url('/assets/wall-vortex.jpg')",     photo: true },
+  { id: 'vishnu', name: 'vishnu',     css: "url('/assets/wall-vishnu.jpg')",     photo: true },
   { id: 'dusk',   name: 'dusk',       css: 'radial-gradient(120% 80% at 20% 0%,var(--accent-soft),transparent 60%),linear-gradient(200deg,var(--bg-code),var(--bg-page) 70%)' },
   { id: 'aurora', name: 'aurora',     css: 'radial-gradient(90% 60% at 15% 15%,#94e2d5,transparent 55%),radial-gradient(80% 70% at 85% 45%,#89b4fa,transparent 55%)' },
   { id: 'sakura', name: 'sakura',     css: 'radial-gradient(70% 50% at 80% 10%,#f5c2e7,transparent 55%),radial-gradient(90% 60% at 10% 70%,#cba6f7,transparent 55%)' },
@@ -130,8 +137,8 @@ const WALLPAPERS = [
   { id: 'stars',  name: 'starfield',  css: 'radial-gradient(1.4px 1.4px at 18% 22%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 62% 12%,var(--fg-dim),transparent),radial-gradient(1.6px 1.6px at 38% 62%,var(--fg),transparent),radial-gradient(1.2px 1.2px at 82% 78%,var(--fg-dim),transparent)' },
 ];
 
-const SIDEBAR_DEFAULTS = { wall: 'none', opacity: 45, blur: 2, bright: 100, sat: 110, scrim: 55, posX: 50, posY: 50, open: true, custom: '' };
-const SIDEBAR_RANGES   = { opacity: [0, 100], blur: [0, 24], bright: [30, 180], sat: [0, 200], scrim: [0, 100], posX: [0, 100], posY: [0, 100] };
+const SIDEBAR_DEFAULTS = { wall: 'none', opacity: 45, blur: 2, bright: 100, sat: 110, scrim: 55, posX: 50, posY: 50, open: true, custom: '', width: 264 };
+const SIDEBAR_RANGES   = { opacity: [0, 100], blur: [0, 24], bright: [30, 180], sat: [0, 200], scrim: [0, 100], posX: [0, 100], posY: [0, 100], width: [180, 560] };
 const SIDEBAR_POSITIONS = ['top', 'center', 'bottom'];
 // What "reset background" restores — the appearance fields and nothing else. `open`
 // is a deliberate user choice (⌘B / "hide sidebar"), not part of the wallpaper look.
@@ -139,7 +146,9 @@ const SIDEBAR_POSITIONS = ['top', 'center', 'bottom'];
 // `custom` is the image the user uploaded — discarding either on a reset would
 // destroy something they'd have to redo by hand.
 const SIDEBAR_LOOK_DEFAULTS = Object.fromEntries(
-  Object.entries(SIDEBAR_DEFAULTS).filter(([k]) => k !== 'open' && k !== 'custom')
+  // `width` joins `open` and `custom` here: all three are panel state the user set
+  // deliberately, and none of them is part of "the background looks wrong, undo it".
+  Object.entries(SIDEBAR_DEFAULTS).filter(([k]) => k !== 'open' && k !== 'custom' && k !== 'width')
 );
 // Below this viewport width the panel is display:none (see the media query in
 // style.css) — the two must stay in step or ⌘B writes a state nobody can see.
@@ -561,6 +570,9 @@ function applySidebarCfg(cfg) {
   if (!sidebarEl) return;
   const vars = sidebarCssVars(cfg);
   Object.keys(vars).forEach(k => sidebarEl.style.setProperty(k, vars[k]));
+  // The width drives #app-shell's first grid column, so it belongs on the shell, not
+  // on the panel it sizes.
+  if (appShell) appShell.style.setProperty('--sb-width', cfg.width + 'px');
   appShell.classList.toggle('no-sidebar', !cfg.open);
 }
 
@@ -3362,6 +3374,92 @@ function attachEvents() {
 
   // Same guarded path as /newNote — never the raw, unrecoverable newNote().
   sbNew.addEventListener('click', () => openPalette('newItem'));
+
+  // ── Resizing the notes panel ───────────────────────────────────────────────
+  // Pointer events rather than mouse events, so a trackpad drag and a touch drag are
+  // the same code path. setPointerCapture keeps the drag alive when the pointer
+  // outruns the 8px handle, which it will on any quick movement.
+  const sbResize = document.getElementById('sb-resize');
+  if (sbResize) {
+    let dragging = false;
+    let widthSaveTimer = null;
+
+    const clampWidth = (px) => {
+      const [lo, hi] = SIDEBAR_RANGES.width;
+      return Math.min(hi, Math.max(lo, Math.round(px)));
+    };
+    const widthFrom = (clientX) => clampWidth(clientX - appShell.getBoundingClientRect().left);
+    const currentWidth = () =>
+      parseInt(appShell.style.getPropertyValue('--sb-width'), 10) ||
+      normalizeSidebarCfg(loadPrefs().sidebar).width;
+
+    // Paint now, persist later. A save writes localStorage AND fires a full /api/sync
+    // PUT, so doing it per event would mean hundreds of writes for one drag — and,
+    // with OS key-repeat, dozens of full-payload pushes from a held arrow key.
+    const setWidth = (px, { persist }) => {
+      const w = clampWidth(px);
+      appShell.style.setProperty('--sb-width', w + 'px');
+      sbResize.setAttribute('aria-valuenow', String(w));
+      if (!persist) return;
+      clearTimeout(widthSaveTimer);
+      widthSaveTimer = setTimeout(() => saveSidebarCfg({ width: w }), 250);
+    };
+
+    // Ending a drag has to be idempotent and reachable from several directions,
+    // because the one thing that must never happen is `sb-resizing` outliving the
+    // gesture: it sets pointer-events:none on the editor, so a stuck class means a
+    // note you cannot click into until you reload the page.
+    const endDrag = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('sb-resizing');
+      if (e && e.pointerId !== undefined) {
+        try { sbResize.releasePointerCapture(e.pointerId); } catch (err) { /* already gone */ }
+      }
+      setWidth(e && e.clientX !== undefined ? widthFrom(e.clientX) : currentWidth(), { persist: true });
+    };
+
+    sbResize.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      dragging = true;
+      try { sbResize.setPointerCapture(e.pointerId); } catch (err) { /* capture is best-effort */ }
+      document.body.classList.add('sb-resizing');
+      e.preventDefault();
+    });
+
+    sbResize.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      setWidth(widthFrom(e.clientX), { persist: false });
+    });
+
+    sbResize.addEventListener('pointerup', endDrag);
+    sbResize.addEventListener('pointercancel', endDrag);
+
+    // The release can happen where we never hear about it — the button let go over
+    // another window, the pointer dragged onto a second monitor, a tab switch
+    // mid-gesture. Neither pointerup nor pointercancel fires then, so without these
+    // the drag never ends.
+    window.addEventListener('blur', () => endDrag(null));
+    document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag(null); });
+
+    // The handle is focusable and announced as a separator, so it should answer arrow
+    // keys like every other control here.
+    sbResize.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const step = e.shiftKey ? 32 : 8;
+      setWidth(currentWidth() + (e.key === 'ArrowRight' ? step : -step), { persist: true });
+    });
+
+    // Double-click restores the default — the escape hatch for a pane dragged somewhere
+    // silly, and the only way back if it has been squeezed to its minimum.
+    sbResize.addEventListener('dblclick', () => setWidth(SIDEBAR_DEFAULTS.width, { persist: true }));
+
+    const [wLo, wHi] = SIDEBAR_RANGES.width;
+    sbResize.setAttribute('aria-valuemin', String(wLo));
+    sbResize.setAttribute('aria-valuemax', String(wHi));
+    sbResize.setAttribute('aria-valuenow', String(normalizeSidebarCfg(loadPrefs().sidebar).width));
+  }
 
   paletteBars.addEventListener('input', onSidebarBarInput);
   paletteBars.addEventListener('input', onTextBarInput);

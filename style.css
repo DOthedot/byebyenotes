@@ -1324,7 +1324,7 @@ body.focus-mode .gutter { display: none; }
    the shell would overflow and the editor would grow under #status with no scrollbar.
    minmax(0, 1fr) makes that independent of the children. */
 #app-shell {
-  display: grid; grid-template-columns: 264px minmax(0, 1fr);
+  display: grid; grid-template-columns: var(--sb-width, 264px) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr); min-height: 0; flex: 1;
 }
 #app-shell.no-sidebar { grid-template-columns: 0 minmax(0, 1fr); }
@@ -1415,6 +1415,28 @@ body.focus-mode #tabline { display: none; }
 }
 #sidebar > * { position: relative; }
 
+/* ── Resize handle ───────────────────────────────────────────────────────────
+   Sits on the panel's right edge. Deliberately wider than it looks (8px of target
+   for a 1px line) — a hairline border is a miserable thing to hit with a mouse. */
+#sb-resize {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 8px;
+  cursor: col-resize; z-index: 3; background: none; border: 0;
+  /* The visible line is a child pseudo-element so the hit area can stay generous
+     without painting an 8px stripe over the wallpaper. */
+}
+#sb-resize::after {
+  content: ''; position: absolute; top: 0; bottom: 0; right: 0; width: 2px;
+  background: var(--accent); opacity: 0; transition: opacity .12s var(--ease);
+}
+#sb-resize:hover::after, #sb-resize:focus-visible::after, body.sb-resizing #sb-resize::after {
+  opacity: .8;
+}
+#sb-resize:focus-visible { outline: none; }
+/* While dragging, the pointer is captured — stop the editor selecting text under it
+   and keep the resize cursor even when the pointer outruns the handle. */
+body.sb-resizing { cursor: col-resize; user-select: none; }
+body.sb-resizing #document-container { pointer-events: none; }
+
 .sb-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px 8px; }
 .sb-tilde { color: var(--accent); }
 .sb-path { color: var(--fg-dim); font-size: 0.96em; flex: 1; }
@@ -1493,12 +1515,16 @@ body.focus-mode .blk-lines { display: none; }
    Hidden until hover or keyboard focus so the tree stays quiet, but always
    reachable — the panel previously had no way to delete a note at all. */
 .sb-act {
-  opacity: 0; flex: 0 0 auto; padding: 0 4px; margin-left: 2px;
-  color: var(--fg-faint); font-size: 0.88em; border-radius: 3px;
+  /* Visible at rest, not hidden until hover. These were opacity:0, so the only way to
+     discover that a row could be renamed at all was to hover it and notice a faint
+     glyph appear — people reasonably concluded the feature did not exist. */
+  opacity: .45; flex: 0 0 auto; padding: 1px 4px; margin-left: 2px;
+  color: var(--fg-dim); font-size: 1em; line-height: 1; border-radius: 3px;
+  transition: opacity .12s var(--ease), color .12s var(--ease);
 }
-.sb-row:hover .sb-act, .sb-row:focus-within .sb-act { opacity: .75; }
+.sb-row:hover .sb-act, .sb-row:focus-within .sb-act { opacity: .9; }
 .sb-act:hover { opacity: 1; color: var(--fg); background: var(--accent-soft); }
-.sb-act.sb-del:hover { color: var(--danger); }
+.sb-act.sb-del:hover { opacity: 1; color: var(--danger); background: color-mix(in srgb, var(--danger) 15%, transparent); }
 /* The name yields first so the actions never get pushed off the edge. */
 .sb-row .sb-name { flex: 0 1 auto; }
 .sb-row .sb-count { margin-left: auto; }

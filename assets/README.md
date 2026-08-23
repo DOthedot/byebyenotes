@@ -11,16 +11,28 @@ tiny links — the same reason `index.html` loads its assets absolutely (issue #
 | `wall-seraph.jpg` | [pin 1106548570970868557](https://in.pinterest.com/pin/1106548570970868557/) | Winged figure with a sword against a lit halo ring. |
 | `wall-atlas.jpg` | [pin 1004302785630082731](https://in.pinterest.com/pin/1004302785630082731/) | Line-art figure lifting a sphere over a golden-ratio construction. |
 | `wall-trust.jpg` | [pin 828099450280656655](https://in.pinterest.com/pin/828099450280656655/) | Vishnu on a lotus before mountains, overlaid "TRUST." |
+| `wall-storm.jpg` | [pin 9148005521163522](https://in.pinterest.com/pin/9148005521163522/) | Rembrandt, *Christ in the Storm on the Sea of Galilee*. |
+| `wall-ruins.jpg` | [pin 14777505023608143](https://in.pinterest.com/pin/14777505023608143/) | Capriccio of classical ruins with an obelisk, Hubert Robert style. |
+| `wall-knight.jpg` | [pin 58054282693877426](https://in.pinterest.com/pin/58054282693877426/) | Armoured knight resting in a meadow. Grainy source — q55, not q70. |
+| `wall-apotheosis.jpg` | [pin 128352658135925084](https://in.pinterest.com/pin/128352658135925084/) | Baroque oval ceiling apotheosis. |
+| `wall-barberini.jpg` | [pin 72550243989491600](https://in.pinterest.com/pin/72550243989491600/) | Pietro da Cortona, Barberini ceiling. |
+| `wall-vortex.jpg` | [pin 93871973478393363](https://in.pinterest.com/pin/93871973478393363/) | Surreal baroque hall, winged figure in a cloud vortex. Likely AI-generated. |
+| `wall-vishnu.jpg` | [pin 965670345127726267](https://in.pinterest.com/pin/965670345127726267/) | Venkateswara against deep blue, with an Om. Religious imagery. |
 
-All are downscaled to 900px tall, JPEG q70. Originals are kept locally in
+All are downscaled to 900px tall, JPEG q70 (q55 where noted). Originals are kept locally in
 `docs/assets/` (gitignored).
 
 ## ⚠️ Licensing — resolve before this reaches production
 
 These were collected from Pinterest as **design references**. None is licensed for
 redistribution, `wall-coronation.jpg` carries another account's watermark, and
-`wall-trust.jpg` contains religious imagery. Merging this directory to `main` means
-Vercel serves them publicly from `byebyenotes.vercel.app`.
+`wall-trust.jpg` / `wall-vishnu.jpg` contain religious imagery.
+
+**This is no longer hypothetical.** These files are on `main` and are served publicly
+by the Railway deployment. The paintings themselves are old enough to be out of
+copyright (Rembrandt, Cortona, Robert), but the *photographs and scans* of them are
+generally not, and the modern pieces (`wall-knight`, `wall-vortex`) have identifiable
+authorship regardless of how they were made. Nothing here has been cleared.
 
 Options, least to most infrastructure:
 

@@ -155,3 +155,39 @@ describe('normalizeTextCfg — font sizes reach a CSS length, so clamp them', ()
     expect(TEXT_DEFAULTS).toEqual({ size: 14, ui: 12.5 });
   });
 });
+
+describe('sidebar width — the panel is resizable, so the value is user-driven', () => {
+  const { normalizeSidebarCfg, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS } = mod;
+
+  test('defaults when absent', () => {
+    expect(normalizeSidebarCfg({}).width).toBe(SIDEBAR_DEFAULTS.width);
+    expect(normalizeSidebarCfg(undefined).width).toBe(264);
+  });
+
+  test('clamped at both ends', () => {
+    // The width drives a grid column. Unclamped, a synced 0 hides the panel with no
+    // handle left to drag back, and a huge value pushes the editor off screen.
+    expect(normalizeSidebarCfg({ width: 0 }).width).toBe(180);
+    expect(normalizeSidebarCfg({ width: -500 }).width).toBe(180);
+    expect(normalizeSidebarCfg({ width: 99999 }).width).toBe(560);
+  });
+
+  test('a value in range is kept, rounded to a whole pixel', () => {
+    expect(normalizeSidebarCfg({ width: 300 }).width).toBe(300);
+    expect(normalizeSidebarCfg({ width: 300.6 }).width).toBe(301);
+  });
+
+  test('junk falls back to the default', () => {
+    expect(normalizeSidebarCfg({ width: 'wide' }).width).toBe(SIDEBAR_DEFAULTS.width);
+    expect(normalizeSidebarCfg({ width: null }).width).toBe(SIDEBAR_DEFAULTS.width);
+    expect(normalizeSidebarCfg({ width: NaN }).width).toBe(SIDEBAR_DEFAULTS.width);
+  });
+
+  test('"reset background" does not resize the panel', () => {
+    // Width is panel state the user set deliberately, like `open` and `custom` —
+    // not part of "the background looks wrong, undo it".
+    expect(SIDEBAR_LOOK_DEFAULTS).not.toHaveProperty('width');
+    expect(SIDEBAR_LOOK_DEFAULTS).not.toHaveProperty('open');
+    expect(SIDEBAR_LOOK_DEFAULTS).not.toHaveProperty('custom');
+  });
+});
