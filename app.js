@@ -1201,7 +1201,12 @@ function applyFont(font) {
 // ── Command palette ───────────────────────────────────────────────────────────
 function buildCommandList() {
   return [
-    { id: 'box',    label: '/box',    ico: '▣',  desc: 'insert code block' },
+    // Named /code to match the "code block" row in the / insert menu — the two do
+    // exactly the same thing and having two names for it just made people wonder what
+    // the difference was. `alias` keeps /box findable for anyone who learned it; the
+    // internal id stays 'box' because data-hint="box" and two handlers key off it and
+    // renaming those buys nothing a reader of this line can't see.
+    { id: 'box',    label: '/code',   ico: '▣',  desc: 'insert a code block', alias: 'box' },
     { id: 'share',  label: '/share',  ico: '⎘',  desc: 'link · qr · capacity', kbd: '⌘⇧C' },
     { id: 'focus',  label: '/focus',  ico: '◎',  desc: focusMode ? 'exit focus mode' : 'distraction-free writing', kbd: '⌘.' },
     { id: 'theme',  label: '/theme',  ico: '◐',  desc: 'change theme' },
@@ -1610,7 +1615,9 @@ function filterPaletteItems(items, query) {
   return items.filter(item =>
     (item.label || '').toLowerCase().includes(q) ||
     (item.desc || '').toLowerCase().includes(q) ||
-    (item.hint || '').toLowerCase().includes(q)
+    (item.hint || '').toLowerCase().includes(q) ||
+    // A renamed command should still answer to what it used to be called.
+    (item.alias || '').toLowerCase().includes(q)
   );
 }
 

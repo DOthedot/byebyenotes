@@ -61,7 +61,7 @@ Type `/` to open the palette, then search or pick:
 
 | Command | Action |
 |---------|--------|
-| `/box` | Insert a code block (choose language) |
+| `/code` | Insert a code block (choose language). Same as `code block` in the `/` menu. |
 | `/share` | Open the share panel — link, QR code, URL capacity |
 | `/sync` | Cross-device sync via passphrase (again to turn off) |
 | `/home` | Back to the start screen (current note saved to recents) |
