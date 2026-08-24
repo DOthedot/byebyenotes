@@ -255,25 +255,28 @@ describe('blur steps in halves', () => {
   });
 });
 
-describe('normalizeMainBg — the home screen and note background', () => {
-  const { normalizeMainBg, MAIN_BG_DEFAULTS, WALLPAPERS } = mod;
+describe('normalizeSurfaceBg — the home screen and the note surface', () => {
+  const { normalizeSurfaceBg, SURFACE_BG_DEFAULTS, wallpapersFor } = mod;
 
-  test('defaults to no image, so nothing changes until someone picks one', () => {
-    for (const bad of [undefined, null, {}, 'nope', 42, []]) {
-      expect(normalizeMainBg(bad)).toEqual(MAIN_BG_DEFAULTS);
+  test('both default to no image, so nothing changes until someone picks one', () => {
+    for (const surface of ['home', 'note']) {
+      for (const bad of [undefined, null, {}, 'nope', 42, []]) {
+        expect(normalizeSurfaceBg(surface, bad)).toEqual(SURFACE_BG_DEFAULTS[surface]);
+      }
+      expect(SURFACE_BG_DEFAULTS[surface].wall).toBe('none');
     }
-    expect(MAIN_BG_DEFAULTS.wall).toBe('none');
   });
 
-  test('defaults are gentler than the sidebar’s — this is a surface you write on', () => {
-    // Dim text (checked list items, comments) is what disappears first over a busy
-    // image, so the note surface starts with a heavier scrim and lower brightness.
-    expect(MAIN_BG_DEFAULTS.scrim).toBeGreaterThan(mod.SIDEBAR_DEFAULTS.scrim);
-    expect(MAIN_BG_DEFAULTS.bright).toBeLessThan(mod.SIDEBAR_DEFAULTS.bright);
+  test('the note surface is the most conservative of the three', () => {
+    // It is the one you stare at for an hour, so it starts dimmer and more scrimmed
+    // than the landing page, which in turn is calmer than the decorative side panel.
+    expect(SURFACE_BG_DEFAULTS.note.scrim).toBeGreaterThan(SURFACE_BG_DEFAULTS.home.scrim);
+    expect(SURFACE_BG_DEFAULTS.note.bright).toBeLessThan(SURFACE_BG_DEFAULTS.home.bright);
+    expect(SURFACE_BG_DEFAULTS.home.scrim).toBeGreaterThan(mod.SIDEBAR_DEFAULTS.scrim);
   });
 
   test('values are clamped to the shared ranges', () => {
-    const big = normalizeMainBg({ opacity: 900, blur: -5, bright: 0, sat: 9999, scrim: -1 });
+    const big = normalizeSurfaceBg('home', { opacity: 900, blur: -5, bright: 0, sat: 9999, scrim: -1 });
     expect(big.opacity).toBe(100);
     expect(big.blur).toBe(0);
     expect(big.bright).toBe(30);
@@ -282,46 +285,42 @@ describe('normalizeMainBg — the home screen and note background', () => {
   });
 
   test('blur keeps its half-steps here too', () => {
-    expect(normalizeMainBg({ blur: 1.5 }).blur).toBe(1.5);
-    expect(normalizeMainBg({ blur: 1.26 }).blur).toBe(1.5);
+    expect(normalizeSurfaceBg('note', { blur: 1.5 }).blur).toBe(1.5);
+    expect(normalizeSurfaceBg('note', { blur: 1.26 }).blur).toBe(1.5);
   });
 
   test('an unknown wallpaper id degrades to none', () => {
-    expect(normalizeMainBg({ wall: 'aurora' }).wall).toBe('none');
-    expect(normalizeMainBg({ wall: '../../etc/passwd' }).wall).toBe('none');
+    expect(normalizeSurfaceBg('home', { wall: 'aurora' }).wall).toBe('none');
+    expect(normalizeSurfaceBg('note', { wall: '../../etc/passwd' }).wall).toBe('none');
   });
 
-  test('every wallpaper this surface offers is accepted', () => {
-    // Was "every wallpaper" — true until each surface got its own list. The narrower
-    // assertion is the real contract now: see the per-surface suite below.
-    for (const w of mod.wallpapersFor('main')) {
-      expect(normalizeMainBg({ wall: w.id }).wall).toBe(w.id);
+  test('every wallpaper a surface offers is accepted by it', () => {
+    for (const surface of ['home', 'note']) {
+      for (const w of wallpapersFor(surface)) {
+        expect(normalizeSurfaceBg(surface, { wall: w.id }).wall).toBe(w.id);
+      }
     }
   });
 
   test('a custom image must be a data URI we could have produced', () => {
-    // Same guard as the sidebar's: this string goes straight into a CSS url(), and a
-    // synced prefs blob is untrusted input.
-    expect(normalizeMainBg({ custom: 'data:image/jpeg;base64,AAAA' }).custom)
+    expect(normalizeSurfaceBg('home', { custom: 'data:image/jpeg;base64,AAAA' }).custom)
       .toBe('data:image/jpeg;base64,AAAA');
-    expect(normalizeMainBg({ custom: 'https://example.com/x.png' }).custom).toBe('');
-    expect(normalizeMainBg({ custom: 'javascript:alert(1)' }).custom).toBe('');
-    expect(normalizeMainBg({ custom: `url(x);background:url(evil)` }).custom).toBe('');
+    expect(normalizeSurfaceBg('home', { custom: 'https://example.com/x.png' }).custom).toBe('');
+    expect(normalizeSurfaceBg('note', { custom: 'javascript:alert(1)' }).custom).toBe('');
   });
 
-  test('it does not carry the sidebar-only width', () => {
-    // width sizes a grid column and belongs to the panel alone; leaking it here would
-    // put a meaningless key in prefs and in every sync payload.
-    expect(normalizeMainBg({ width: 400 })).not.toHaveProperty('width');
+  test('neither carries the sidebar-only width', () => {
+    expect(normalizeSurfaceBg('home', { width: 400 })).not.toHaveProperty('width');
+    expect(normalizeSurfaceBg('note', { width: 400 })).not.toHaveProperty('width');
   });
-});
 
-test('the valley wallpaper is registered and is the light one', () => {
-  expect(mod.WALLPAPERS.find(w => w.id === 'valley')).toBeTruthy();
+  test('an unknown surface falls back rather than throwing', () => {
+    expect(() => normalizeSurfaceBg('nonsense', {})).not.toThrow();
+  });
 });
 
 describe('custom image fingerprint', () => {
-  const { customFingerprint, normalizeMainBg } = mod;
+  const { customFingerprint } = mod;
   const a = 'data:image/jpeg;base64,' + 'A'.repeat(2000);
   const b = 'data:image/jpeg;base64,' + 'B'.repeat(2000);
 
@@ -349,61 +348,131 @@ describe('custom image fingerprint', () => {
   test('it is derived from the image, never taken from input', () => {
     // A synced blob could otherwise claim any fingerprint it liked and make another
     // device adopt a 'custom' wall for a picture it does not have.
-    const cfg = normalizeMainBg({ custom: a, customId: 'lies' });
+    const cfg = mod.normalizeSurfaceBg('home', { custom: a, customId: 'lies' });
     expect(cfg.customId).toBe(customFingerprint(a));
   });
 
   test('a rejected image leaves an empty fingerprint, not a stale one', () => {
-    const cfg = normalizeMainBg({ custom: 'https://example.com/x.png', customId: 'stale' });
+    const cfg = mod.normalizeSurfaceBg('home', { custom: 'https://example.com/x.png', customId: 'stale' });
     expect(cfg.custom).toBe('');
     expect(cfg.customId).toBe('');
   });
 });
 
 describe('each surface offers its own wallpapers', () => {
-  const { wallpapersFor, normalizeSidebarCfg, normalizeMainBg, SIDEBAR_DEFAULTS, MAIN_BG_DEFAULTS } = mod;
+  const { wallpapersFor, normalizeSidebarCfg, normalizeSurfaceBg, SIDEBAR_DEFAULTS } = mod;
   const ids = (surface) => wallpapersFor(surface).map(w => w.id);
 
-  test('the side panel offers everything except vortex and valley', () => {
-    expect(ids('side')).not.toContain('vortex');
-    expect(ids('side')).not.toContain('valley');
-    expect(ids('side')).toEqual(expect.arrayContaining(['glory', 'storm', 'knight', 'grid', 'stars']));
+  test('the side panel keeps the photographic set', () => {
+    expect(ids('side')).toEqual(expect.arrayContaining(['glory', 'storm', 'knight', 'stars']));
   });
 
-  test('home & notes offers only vortex and valley', () => {
-    expect(ids('main').filter(id => id !== 'none')).toEqual(['vortex', 'valley']);
+  test('home offers only vortex, valley and city', () => {
+    expect(ids('home').filter(id => id !== 'none')).toEqual(['vortex', 'valley', 'city']);
   });
 
-  test('both offer "none", or there would be no way to turn a background off', () => {
-    expect(ids('side')).toContain('none');
-    expect(ids('main')).toContain('none');
+  test('notes offers only terminal', () => {
+    expect(ids('note').filter(id => id !== 'none')).toEqual(['grid']);
   });
 
-  test('a wallpaper the surface does not offer is rejected, not rendered', () => {
+  test('terminal is on both the panel and notes; the others are not shared', () => {
+    expect(ids('side')).toContain('grid');
+    expect(ids('note')).toContain('grid');
+    for (const id of ['vortex', 'valley', 'city']) expect(ids('side')).not.toContain(id);
+  });
+
+  test('every surface offers "none", or a background could not be turned off', () => {
+    for (const surface of ['side', 'home', 'note']) expect(ids(surface)).toContain('none');
+  });
+
+  test('a wallpaper another surface owns is rejected, not rendered', () => {
     // Reachable from an older build or a device on a different version, via sync.
-    expect(normalizeMainBg({ wall: 'storm' }).wall).toBe(MAIN_BG_DEFAULTS.wall);
+    expect(normalizeSurfaceBg('note', { wall: 'valley' }).wall).toBe('none');
+    expect(normalizeSurfaceBg('home', { wall: 'grid' }).wall).toBe('none');
     expect(normalizeSidebarCfg({ wall: 'valley' }).wall).toBe(SIDEBAR_DEFAULTS.wall);
   });
 
-  test('each surface still accepts its own', () => {
-    expect(normalizeMainBg({ wall: 'valley' }).wall).toBe('valley');
-    expect(normalizeMainBg({ wall: 'vortex' }).wall).toBe('vortex');
-    expect(normalizeSidebarCfg({ wall: 'storm' }).wall).toBe('storm');
-  });
-
-  test('an uploaded image is allowed on both — it is not in the list', () => {
-    expect(normalizeMainBg({ wall: 'custom', custom: 'data:image/jpeg;base64,AAAA' }).wall).toBe('custom');
-    expect(normalizeSidebarCfg({ wall: 'custom', custom: 'data:image/jpeg;base64,AAAA' }).wall).toBe('custom');
+  test('an uploaded image is allowed anywhere — it is not in the list', () => {
+    const img = 'data:image/jpeg;base64,AAAA';
+    for (const surface of ['home', 'note']) {
+      expect(normalizeSurfaceBg(surface, { wall: 'custom', custom: img }).wall).toBe('custom');
+    }
+    expect(normalizeSidebarCfg({ wall: 'custom', custom: img }).wall).toBe('custom');
   });
 
   test('a wallpaper with no `on` declared is offered everywhere', () => {
     // Guards the failure mode where adding an entry and forgetting the field makes it
-    // invisible in both pickers with no error.
-    const { WALLPAPERS } = mod;
-    const undeclared = WALLPAPERS.filter(w => !Array.isArray(w.on));
+    // invisible in every picker with no error.
+    const undeclared = mod.WALLPAPERS.filter(w => !Array.isArray(w.on));
     for (const w of undeclared) {
-      expect(ids('side')).toContain(w.id);
-      expect(ids('main')).toContain(w.id);
+      for (const surface of ['side', 'home', 'note']) expect(ids(surface)).toContain(w.id);
     }
+  });
+});
+
+describe('the old single mainBg setting is honoured', () => {
+  const { normalizeSurfaceBg, wallpapersFor } = mod;
+
+  test('a value legal for the new surface carries across', () => {
+    // home & notes were one setting for one release. Someone who picked a background
+    // then should keep it, not silently find it reset to none.
+    const old = { wall: 'valley', opacity: 42, scrim: 72, bright: 70 };
+    const seeded = normalizeSurfaceBg('home', old);
+    expect(seeded.wall).toBe('valley');
+    expect(seeded.opacity).toBe(42);
+    expect(seeded.scrim).toBe(72);
+  });
+
+  test('...and one that is not legal for that surface still degrades', () => {
+    // valley is offered on home, not on notes — carrying it across must not smuggle a
+    // wallpaper past the per-surface list.
+    expect(wallpapersFor('note').map(w => w.id)).not.toContain('valley');
+    expect(normalizeSurfaceBg('note', { wall: 'valley', scrim: 72 }).wall).toBe('none');
+    // the numeric settings still carry, only the wallpaper is refused
+    expect(normalizeSurfaceBg('note', { wall: 'valley', scrim: 72 }).scrim).toBe(72);
+  });
+});
+
+// ── The sync payload's two competing jobs ────────────────────────────────────
+// A push must strip device-local images out of `prefs` (they are pure waste on a
+// two-second autosave, and the server drops them anyway) while still delivering the
+// sidebar wallpaper in its own `sidebarImage` field when it has actually changed.
+// Those pull in opposite directions on the same string, and the ordering between them
+// is the whole trick — so it is pinned here rather than left to a reader's eye.
+describe('buildSyncPrefs', () => {
+  const img = 'data:image/png;base64,' + 'A'.repeat(400);
+
+  test('strips custom images at every depth, keeping the fingerprint', () => {
+    const { prefs } = mod.buildSyncPrefs({
+      theme: 'dark',
+      sidebar:    { wall: 'custom', custom: img },
+      mainBg:     { wall: 'custom', custom: img },   // the one-release-old key
+      surfaceBg:  { home: { wall: 'custom', custom: img }, note: { wall: 'none', custom: '' } },
+    }, false);
+    expect(prefs.sidebar.custom).toBe('');
+    expect(prefs.mainBg.custom).toBe('');
+    expect(prefs.surfaceBg.home.custom).toBe('');
+    expect(prefs.theme).toBe('dark');
+    // The marker is what tells another device whether a 'custom' wall refers to a
+    // picture that device actually holds, so it must outlive the image.
+    expect(prefs.surfaceBg.home.customId).toBe(mod.customFingerprint(img));
+  });
+
+  test('the sidebar image still travels when it is dirty', () => {
+    const { sidebarImage } = mod.buildSyncPrefs({ sidebar: { wall: 'custom', custom: img } }, true);
+    // Regression: stripping used to run before this was read, so a freshly picked
+    // wallpaper went up as `null` — which the server reads as "clear it".
+    expect(sidebarImage).toBe(img);
+  });
+
+  test('a dirty push with no image sends null, and a clean push sends nothing', () => {
+    expect(mod.buildSyncPrefs({ sidebar: { wall: 'none', custom: '' } }, true).sidebarImage).toBeNull();
+    expect(mod.buildSyncPrefs({ sidebar: { custom: img } }, false).sidebarImage).toBeUndefined();
+  });
+
+  test('the input is not mutated — localStorage still holds the image', () => {
+    const src = { sidebar: { wall: 'custom', custom: img } };
+    mod.buildSyncPrefs(src, true);
+    expect(src.sidebar.custom).toBe(img);
   });
 });
