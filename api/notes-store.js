@@ -210,17 +210,29 @@ function sanitizePrefs(raw) {
   // when this was written, `mainBg` arrived later and reintroduced the same bug
   // verbatim. Anything with a `custom` data URI gets the same treatment, so a third
   // surface cannot repeat it a third time.
-  const cleaned = {};
-  for (const [k, v] of Object.entries(raw)) {
+  //
+  // At EVERY depth, not just the top. The one-level version held only while every
+  // surface was a direct child of prefs; splitting home and notes moved them under
+  // `surfaceBg`, which put the image two levels down and walked it straight back past
+  // this guard. Recursing is what actually makes "by shape" true — the depth-based
+  // escape was the fourth outing for this same bug.
+  //
+  // Arrays are walked too. Nothing in prefs nests an image inside one today, but the
+  // whole reason this runs server-side is that the payload is attacker-shaped, and
+  // skipping arrays would leave one uninspected hiding place.
+  const stripCustom = (value, depth) => {
+    if (depth > PREFS_MAX_DEPTH || !value || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(v => stripCustom(v, depth + 1));
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = stripCustom(v, depth + 1);
     // Strip on the key being PRESENT, not on it holding a string. Requiring a string
     // left the original bug reachable through `custom: { nested: <40KB> }` — a shape
     // this app's own client never produces, but a hand-written PUT trivially does, and
     // guarding against exactly that is the point of doing this server-side at all.
-    cleaned[k] = (v && typeof v === 'object' && !Array.isArray(v) && 'custom' in v)
-      ? { ...v, custom: undefined }
-      : v;
-  }
-  const safe = sanitizeJsonTree(cleaned, 0);
+    if ('custom' in out) out.custom = undefined;
+    return out;
+  };
+  const safe = sanitizeJsonTree(stripCustom(raw, 0), 0);
   if (safe === null) return null;
   const json = JSON.stringify(safe);
   if (Buffer.byteLength(json, 'utf8') > MAX_PREFS_BYTES) return null;
