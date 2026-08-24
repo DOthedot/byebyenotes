@@ -327,6 +327,66 @@ describe('uploaded wallpapers must never reach the prefs blob', () => {
     expect(out.someNewPanel.custom).toBeUndefined();
   });
 
+  test('a nested surface image is stripped too, not just a top-level one', () => {
+    // The walk was one level deep, which held only while every surface was a direct
+    // child of prefs. Splitting home and notes moved them under `surfaceBg`, putting
+    // the image two levels down and straight back past this guard — the same bug the
+    // shape-based stripping above was written to end, one nesting level lower.
+    const out = store.sanitizePrefs({
+      t: 1, theme: 'mocha',
+      surfaceBg: {
+        home: { wall: 'custom', custom: img, opacity: 45 },
+        note: { wall: 'none', opacity: 35 },
+      },
+    });
+    expect(out).not.toBeNull();
+    expect(out.surfaceBg.home.custom).toBeUndefined();
+    expect(out.surfaceBg.home.opacity).toBe(45);   // the rest of the surface survives
+    expect(out.surfaceBg.note).toEqual({ wall: 'none', opacity: 35 });
+    expect(out.theme).toBe('mocha');
+  });
+
+  test('an image buried deeper than any real surface is still stripped', () => {
+    const out = store.sanitizePrefs({ t: 1, a: { b: { c: { d: { custom: img } } } } });
+    expect(out).not.toBeNull();
+    expect(out.a.b.c.d.custom).toBeUndefined();
+  });
+
+  test('a nested image inside an array element is stripped', () => {
+    const out = store.sanitizePrefs({ t: 1, tabs: [{ nid: 'x', bg: { custom: img } }] });
+    expect(out).not.toBeNull();
+    expect(out.tabs[0].bg.custom).toBeUndefined();
+    expect(out.tabs[0].nid).toBe('x');
+  });
+
+  // Where the stripping stops, and what happens past it. Both walks (this strip and
+  // sanitizeJsonTree) cap at PREFS_MAX_DEPTH with the same 0-indexed convention, so an
+  // image nested deeper than the cap is NOT stripped — instead the depth guard refuses
+  // the whole blob. That is fail-closed and predates this fix, but it is the seam
+  // between two guards, so it is pinned here: raising PREFS_MAX_DEPTH on one side
+  // without the other would open a gap that no other test would notice.
+  const nest = (levels, leaf) => {
+    const root = {}; let cur = root;
+    for (let i = 0; i < levels; i++) { cur.n = {}; cur = cur.n; }
+    Object.assign(cur, leaf);
+    return root;
+  };
+
+  test('an image at the depth limit is stripped, and the rest of prefs survives', () => {
+    const out = store.sanitizePrefs({ t: 1, theme: 'mocha', deep: nest(6, { custom: img, wall: 'custom' }) });
+    expect(out).not.toBeNull();
+    let cur = out.deep;
+    for (let i = 0; i < 6; i++) cur = cur.n;
+    expect(cur.custom).toBeUndefined();
+    expect(cur.wall).toBe('custom');
+    expect(out.theme).toBe('mocha');
+  });
+
+  test('past the depth limit the whole blob is refused, never silently kept', () => {
+    // The one outcome that must never happen: the image surviving into the column.
+    expect(store.sanitizePrefs({ t: 1, deep: nest(40, { custom: img }) })).toBeNull();
+  });
+
   test('the surface’s other settings are kept', () => {
     const out = store.sanitizePrefs({ t: 1, mainBg: { wall: 'valley', opacity: 40, scrim: 70, custom: img } });
     expect(out.mainBg).toEqual({ wall: 'valley', opacity: 40, scrim: 70 });
