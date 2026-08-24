@@ -1372,17 +1372,31 @@ body.focus-mode #sidebar { display: none; }
    absolutely-positioned layer inside a scrolling box scrolls with the content —
    the image would slide out of view as you wrote. #tabline sits above with its own
    opaque background, so it covers the layer rather than floating on it. */
-#main-col::before, #empty-state::before {
+/* Two independent surfaces: the note area reads --nb-*, the home screen --hb-*.
+   Filters live on the artwork layer alone, so no amount of blur touches the text. */
+#main-col::before {
   content: ''; position: absolute; inset: 0; z-index: -2; pointer-events: none;
-  background-image: var(--mb-img, none);
-  background-size: cover; background-position: var(--mb-pos, center);
-  opacity: var(--mb-opacity, 0);
-  filter: blur(var(--mb-blur, 3px)) brightness(var(--mb-bright, 0.7)) saturate(var(--mb-sat, 1));
+  background-image: var(--nb-img, none);
+  background-size: cover; background-position: var(--nb-pos, center);
+  opacity: var(--nb-opacity, 0);
+  filter: blur(var(--nb-blur, 3px)) brightness(var(--nb-bright, 0.65)) saturate(var(--nb-sat, 1));
 }
-#main-col::after, #empty-state::after {
+#main-col::after {
   content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background: linear-gradient(180deg, var(--bg-page), transparent 42%, var(--bg-page));
-  opacity: var(--mb-scrim, 0);
+  opacity: var(--nb-scrim, 0);
+}
+#empty-state::before {
+  content: ''; position: absolute; inset: 0; z-index: -2; pointer-events: none;
+  background-image: var(--hb-img, none);
+  background-size: cover; background-position: var(--hb-pos, center);
+  opacity: var(--hb-opacity, 0);
+  filter: blur(var(--hb-blur, 2px)) brightness(var(--hb-bright, 0.85)) saturate(var(--hb-sat, 1));
+}
+#empty-state::after {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: linear-gradient(180deg, var(--bg-page), transparent 42%, var(--bg-page));
+  opacity: var(--hb-scrim, 0);
 }
 #main-col > *, #empty-state > * { position: relative; }
 /* #document-container is a flex child again (of #main-col, under the tabline), so
@@ -1566,11 +1580,24 @@ body.focus-mode .blk-lines { display: none; }
 .sb-row:hover .sb-act, .sb-row:focus-within .sb-act { opacity: .9; }
 .sb-act:hover { opacity: 1; color: var(--fg); background: var(--accent-soft); }
 .sb-act.sb-del:hover { opacity: 1; color: var(--danger); background: color-mix(in srgb, var(--danger) 15%, transparent); }
-/* The name yields first so the actions never get pushed off the edge. */
-.sb-row .sb-name { flex: 0 1 auto; }
-.sb-row .sb-count { margin-left: auto; }
-.sb-row .sb-open { margin-left: auto; }
-.sb-row:hover .sb-count, .sb-row:hover .sb-open { margin-left: auto; }
+/* ── Row trailing columns ────────────────────────────────────────────────────
+   The name grows to fill, so everything after it is pinned to the right edge
+   instead of trailing wherever the text happens to stop. It was `flex: 0 1 auto`
+   — shrink but never grow — which left the rename and delete icons sitting at a
+   different x on every row, following each file name like punctuation.
+
+   The three trailing slots are fixed width and always present (the open-note dot
+   renders empty when the note isn't open), so ✎ and ✕ line up down a column
+   across notes and folders alike. */
+.sb-row .sb-name { flex: 1 1 auto; min-width: 0; }
+.sb-row .sb-count,
+.sb-row .sb-open {
+  /* min-width, not width: a folder count is unbounded, and a fixed box clipped "12"
+     to "1" — the same class of misalignment this block exists to fix, one column
+     over. The slot still reserves its space when the number is a single digit. */
+  flex: 0 0 auto; min-width: 1.1em; margin-left: 4px; text-align: center;
+}
+.sb-act { flex: 0 0 auto; width: 1.5em; text-align: center; padding: 1px 0; margin-left: 2px; }
 
 /* ── Settings float: give the list and the swatches their own room ───────────
    #palette-list was height-capped while the swatches and bars took the rest, so

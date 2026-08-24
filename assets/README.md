@@ -18,9 +18,12 @@ tiny links — the same reason `index.html` loads its assets absolutely (issue #
 | `wall-barberini.jpg` | [pin 72550243989491600](https://in.pinterest.com/pin/72550243989491600/) | Pietro da Cortona, Barberini ceiling. |
 | `wall-vortex.jpg` | [pin 93871973478393363](https://in.pinterest.com/pin/93871973478393363/) | Surreal baroque hall, winged figure in a cloud vortex. Likely AI-generated. |
 | `wall-vishnu.jpg` | [pin 965670345127726267](https://in.pinterest.com/pin/965670345127726267/) | Venkateswara against deep blue, with an Om. Religious imagery. |
-| `wall-valley.jpg` | [pin 797700152797705538](https://in.pinterest.com/pin/797700152797705538/) | Bright Ghibli-style alpine valley. The only light image in the set — the useful one for testing whether text stays legible over a background. |
+| `wall-valley.jpg` | [pin 797700152797705538](https://in.pinterest.com/pin/797700152797705538/) | Bright Ghibli-style alpine valley. The only light image in the set — the useful one for testing whether text stays legible over a background. Rotated a quarter turn from the source, which was on its side. |
+| `wall-city.jpg` | [pin 900790362990606676](https://in.pinterest.com/pin/900790362990606676/) | Dusk city skyline, "APERA XV". Also rotated upright from a sideways source. |
 
-All are downscaled to 900px tall, JPEG q70 (q55 where noted). Originals are kept locally in
+All are downscaled to 900px on their long edge — tall for the portrait side-panel walls,
+wide for the landscape ones (`wall-valley.jpg` 900×506, `wall-city.jpg` 900×450) — JPEG
+q70 (q55 where noted). Originals are kept locally in
 `docs/assets/` (gitignored).
 
 ## ⚠️ Licensing — resolve before this reaches production
