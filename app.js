@@ -2848,6 +2848,13 @@ function renderTabline() {
     b.innerHTML =
       `<span class="t-idx">${i + 1}</span>` +
       `<span class="t-name">${escapeHtml(title || 'untitled')}</span>` +
+      // Same ✎ the sidebar row offers, on the same startRename path — renaming a tab
+      // IS renaming the note, so routing both through one function keeps them from
+      // drifting. Omitted when the note has no snapshot yet, exactly as the sidebar
+      // omits it on unsaved rows: applyRename looks the note up by nid and silently
+      // does nothing when it isn't there, so an offered ✎ would take a new title and
+      // quietly drop it.
+      (snap ? `<span class="t-ren" data-rename="${escapeHtml(nid)}" title="rename">✎</span>` : '') +
       `<span class="t-x" data-close="${escapeHtml(nid)}" aria-label="close">×</span>`;
     tabsEl.appendChild(b);
   });
@@ -3786,6 +3793,11 @@ function attachEvents() {
     if (e.target.id === 'tab-help') return openPalette('help');
     const x = e.target.closest('[data-close]');
     if (x) { e.stopPropagation(); return closeTab(x.dataset.close); }
+    // Before the [data-tab] check below, and stopping propagation, or the tab's own
+    // click handler would also fire and switch notes on the way to the prompt.
+    // Renames by nid, so it works on any tab without making it the active one first.
+    const ren = e.target.closest('[data-rename]');
+    if (ren) { e.stopPropagation(); return startRename(ren.dataset.rename); }
     const tab = e.target.closest('[data-tab]');
     if (tab) switchToTab(tab.dataset.tab);
   });
