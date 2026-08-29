@@ -1469,9 +1469,17 @@ body.focus-mode #sidebar { display: none; }
 #tabline .tab .t-name { overflow: hidden; text-overflow: ellipsis; }
 #tabline .tab .t-dirty { color: var(--accent); font-size: 1.12em; line-height: 1; }
 #tabline .tab.active .t-dirty { color: var(--bg-page); }
-#tabline .tab .t-x { opacity: 0; padding: 0 2px; border-radius: 3px; font-size: 1.12em; line-height: 1; }
-#tabline .tab:hover .t-x { opacity: .55; }
-#tabline .tab .t-x:hover { opacity: 1; background: rgba(0,0,0,.25); }
+/* ✎ and × share one treatment: invisible until the tab is hovered, so the tabline
+   stays quiet, then lit individually on their own hover. Grouped in one selector
+   because they must stay identical — a rename that looked different from close
+   would read as a different KIND of control rather than a sibling of it. */
+#tabline .tab .t-x,
+#tabline .tab .t-ren { opacity: 0; padding: 0 2px; border-radius: 3px; font-size: 1.12em; line-height: 1; }
+#tabline .tab .t-ren { font-size: .95em; }   /* ✎ carries more ink than × at a size */
+#tabline .tab:hover .t-x,
+#tabline .tab:hover .t-ren { opacity: .55; }
+#tabline .tab .t-x:hover,
+#tabline .tab .t-ren:hover { opacity: 1; background: rgba(0,0,0,.25); }
 #tabline #tab-new, #tabline #tab-help {
   flex: 0 0 auto; border: 0; padding: 0 12px; cursor: pointer; font: inherit;
   background: var(--bg-raised); color: var(--fg-dim); border-left: 1px solid var(--bg-page);
