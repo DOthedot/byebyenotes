@@ -601,7 +601,21 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
   word-wrap: break-word;
 }
 
-.hljs { background: transparent; padding: 0; }
+/* The highlight layer wears hljs's own class so each theme's base `.hljs { color }`
+   reaches the tokens hljs does not classify. That class also drags in the theme's
+   chrome, which has to be undone here — and the selector has to out-specify what the
+   theme actually uses, which is NOT plain `.hljs`:
+
+     pre code.hljs { padding: 1em; … }   (0,1,2)  ← the one that bites
+     code.hljs     { padding: 3px 5px }  (0,1,1)
+     .hljs         { color; background } (0,1,0)  ← the one we want
+
+   `.hljs-layer code` is only (0,1,1), so `pre code.hljs` beat it and the padding came
+   back — which is not cosmetic: it shifts this layer's text out from under the
+   transparent editable and puts the caret off its glyph again, the very bug the
+   font-family line above fixes. Two classes plus the element is (0,2,1) and clears
+   all three. `color` is deliberately left alone; inheriting it is the entire point. */
+.hljs-layer code.hljs { background: transparent; padding: 0; }
 
 .code-block .block-content {
   position: relative;

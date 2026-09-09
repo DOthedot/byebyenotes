@@ -1243,6 +1243,19 @@ function syncHighlight(blockId) {
   if (!content || !code) return;
   const text = content.innerText || '';
   const lang = block.lang === 'text' ? 'plaintext' : block.lang;
+  // `hljs.highlight().value` returns token markup only — unlike highlightElement(),
+  // it does not put the wrapper class on the element. Without it every theme's base
+  // `.hljs { color: … }` misses, so anything hljs does NOT tokenise (identifiers,
+  // punctuation, operators) drew in the app's foreground instead of the theme's code
+  // colour, and style.css's own `.hljs` rule matched nothing either.
+  //
+  // Wearing the class also drags in the theme's own chrome, which style.css undoes
+  // via `.hljs-layer code.hljs` — see the note there before touching that selector.
+  // It is deliberately (0,2,1) to out-specify the `pre code.hljs { padding: 1em }`
+  // every theme ships; simplifying it back to `.hljs` loses on specificity, and the
+  // padding that returns is not cosmetic — it shifts this layer's text out from under
+  // the transparent editable and puts the caret back off its glyph.
+  code.className = 'hljs';
   try {
     code.innerHTML = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
   } catch (e) {
