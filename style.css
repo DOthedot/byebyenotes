@@ -561,7 +561,10 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
 
 .code-body { position: relative; }
 
-/* Two-layer: highlight behind, contenteditable in front */
+/* Two-layer: highlight behind, contenteditable in front.
+   The two must lay text out IDENTICALLY — the front layer is transparent and
+   contributes only the caret, so any metric that differs between them shows up as a
+   caret parked away from the glyph it belongs to. */
 .hljs-layer {
   position: absolute;
   top: 0;
@@ -570,6 +573,14 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
   height: 100%;
   padding: 10px 14px;
   margin: 0;
+  /* Load-bearing, and easy to lose: this is a <pre>, and the UA stylesheet sets
+     `pre { font-family: monospace }`. That default beats inheritance, so without
+     this line the highlight layer renders in the browser's stock monospace while the
+     editable above it uses the app font — two different sets of glyph metrics under
+     one line-height. The caret sat 1.5px above the character it marked, and the
+     `.hljs-layer code { font-family: inherit }` below faithfully inherited the wrong
+     font, which is what made it look like the font WAS being applied. */
+  font-family: inherit;
   font-size: calc(var(--font-size) - 1px);
   line-height: 1.7;
   white-space: pre-wrap;
