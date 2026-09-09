@@ -561,7 +561,10 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
 
 .code-body { position: relative; }
 
-/* Two-layer: highlight behind, contenteditable in front */
+/* Two-layer: highlight behind, contenteditable in front.
+   The two must lay text out IDENTICALLY — the front layer is transparent and
+   contributes only the caret, so any metric that differs between them shows up as a
+   caret parked away from the glyph it belongs to. */
 .hljs-layer {
   position: absolute;
   top: 0;
@@ -570,6 +573,14 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
   height: 100%;
   padding: 10px 14px;
   margin: 0;
+  /* Load-bearing, and easy to lose: this is a <pre>, and the UA stylesheet sets
+     `pre { font-family: monospace }`. That default beats inheritance, so without
+     this line the highlight layer renders in the browser's stock monospace while the
+     editable above it uses the app font — two different sets of glyph metrics under
+     one line-height. The caret sat 1.5px above the character it marked, and the
+     `.hljs-layer code { font-family: inherit }` below faithfully inherited the wrong
+     font, which is what made it look like the font WAS being applied. */
+  font-family: inherit;
   font-size: calc(var(--font-size) - 1px);
   line-height: 1.7;
   white-space: pre-wrap;
@@ -590,7 +601,21 @@ strong { color: color-mix(in srgb, var(--fg) 92%, white); }
   word-wrap: break-word;
 }
 
-.hljs { background: transparent; padding: 0; }
+/* The highlight layer wears hljs's own class so each theme's base `.hljs { color }`
+   reaches the tokens hljs does not classify. That class also drags in the theme's
+   chrome, which has to be undone here — and the selector has to out-specify what the
+   theme actually uses, which is NOT plain `.hljs`:
+
+     pre code.hljs { padding: 1em; … }   (0,1,2)  ← the one that bites
+     code.hljs     { padding: 3px 5px }  (0,1,1)
+     .hljs         { color; background } (0,1,0)  ← the one we want
+
+   `.hljs-layer code` is only (0,1,1), so `pre code.hljs` beat it and the padding came
+   back — which is not cosmetic: it shifts this layer's text out from under the
+   transparent editable and puts the caret off its glyph again, the very bug the
+   font-family line above fixes. Two classes plus the element is (0,2,1) and clears
+   all three. `color` is deliberately left alone; inheriting it is the entire point. */
+.hljs-layer code.hljs { background: transparent; padding: 0; }
 
 .code-block .block-content {
   position: relative;
