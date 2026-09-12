@@ -74,13 +74,14 @@ field optional. Returns `{ ok: true, ...counts }`.
 
 | Behaviour | Why |
 |---|---|
-| Upserts are **no-ops when nothing changed** | Otherwise every 2s push bumps `updated_at` on all 30 notes and `?since=` returns everything, forever. |
+| Upserts are **no-ops when nothing changed** | Otherwise every 2s push bumps `updated_at` on every note and `?since=` returns everything, forever. |
 | A tombstoned note is **never resurrected** by an upsert | A device that hasn't pulled yet still holds the note and will push it back. Making deletes stick is the entire point. |
-| Absence of `notes` ≠ deletion | The client only ever sends its most recent 30 (`SNAP_MAX`); delete-by-absence would wipe note 31 onward. |
+| Absence of `notes` ≠ deletion | The client only ever sends its most recent `SNAP_MAX` notes (200); delete-by-absence would wipe everything past that. |
 | `notes` is full state; `folders` is **intentions only** | The notes upsert refuses tombstoned rows, so re-sending every note is harmless. The folders upsert deliberately *un*-deletes (so re-creating a deleted path works), which means the client must send only folders the user just created — sending its whole list would revive folders another device had deleted. `app.js` tracks these in `bbn.pending`. |
 | `sidebarImage` **omitted** = leave it; **`null`** = clear it | The client doesn't carry the 120KB image in a normal push, so "omitted means clear" would wipe the wallpaper on every autosave. |
 | `prefs` is refused if its `t` is older than the stored one | Stops a laggy device replaying an old blob over a newer one. |
-| One malformed note is skipped, not fatal | It must not strand the other twenty-nine. |
+| A full pull is **capped at `PULL_LIMIT` (200) with no pagination** | Bounded so one account cannot hold a connection open. But `push` upserts without ever trimming, and the client's `saveSnapshot` evicts its oldest note **without tombstoning it** — only an explicit delete tombstones. So an account that has created more notes over its lifetime than the client's `SNAP_MAX` already holds rows no pull returns. Raising `SNAP_MAX` 30→200 narrowed the gap; it did not close it. **Paginate this, or refuse oversized imports, before `/import` ships to sync users.** |
+| One malformed note is skipped, not fatal | It must not strand every other note in the batch. |
 
 ### Status codes
 

@@ -15,11 +15,18 @@ test('mergeRecents keeps newest entry per note id', () => {
   expect(merged[0].title).toBe('a-newer');
 });
 
-test('mergeRecents sorts newest-first and caps at 30', () => {
-  const many = Array.from({ length: 35 }, (_, i) => snap(`n${i}`, i));
+test('mergeRecents sorts newest-first and caps the list', () => {
+  // Deliberately not asserting a literal cap. This test hardcoded 30 and had to be
+  // edited when the ceiling moved; what actually matters is that the list IS capped
+  // and that the survivors are the newest, whatever the number happens to be.
+  const many = Array.from({ length: 400 }, (_, i) => snap(`n${i}`, i));
   const merged = mergeRecents(many, []);
-  expect(merged).toHaveLength(30);
-  expect(merged[0].nid).toBe('n34');
+  expect(merged.length).toBeLessThan(400);
+  expect(merged[0].nid).toBe('n399');
+  // Capping must drop the OLDEST, never an arbitrary slice.
+  const kept = merged.map(s => s.t);
+  expect(kept).toEqual([...kept].sort((a, b) => b - a));
+  expect(Math.min(...kept)).toBe(400 - merged.length);
 });
 
 test('groupByFolder splits loose notes from sorted folders', () => {
@@ -41,4 +48,30 @@ test('groupByFolder treats blank folder as loose', () => {
 test('mergeRecents tolerates null/invalid input', () => {
   expect(mergeRecents(null, undefined)).toEqual([]);
   expect(mergeRecents([null, {}, snap('a', 1)], null).map(s => s.nid)).toEqual(['a']);
+});
+
+// ── The note store's ceiling is tied to the server's, not chosen freely ───────
+// pushNow sends every snapshot in one request and api/notes-store.js slices anything
+// past MAX_NOTES_PER_REQUEST away without reporting it. A local cap above that number
+// would swap a visible local limit for silent loss on the server, so the two must not
+// drift apart.
+describe('SNAP_MAX', () => {
+  const store = require('../api/notes-store.js');
+
+  test('never exceeds what one sync request can carry', () => {
+    const many = Array.from({ length: 400 }, (_, i) => ({
+      nid: 'n' + i, title: 't' + i, t: i,
+      hash: btoa(JSON.stringify({ blocks: [{ type: 'text', content: 'x' }] })),
+    }));
+    const kept = mergeRecents(many, []).length;
+    expect(kept).toBeLessThanOrEqual(store.MAX_NOTES_PER_REQUEST);
+  });
+
+  test('holds more than a trivial handful, so a real vault fits', () => {
+    const many = Array.from({ length: 400 }, (_, i) => ({
+      nid: 'n' + i, title: 't' + i, t: i,
+      hash: btoa(JSON.stringify({ blocks: [{ type: 'text', content: 'x' }] })),
+    }));
+    expect(mergeRecents(many, []).length).toBeGreaterThanOrEqual(200);
+  });
 });

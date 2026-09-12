@@ -109,7 +109,28 @@ const SYNC_KEY_LS    = 'bbn.syncKey';
 // because the server cannot tell "I still have this" from "I meant to make this".
 // Only deliberate acts go in here, and they are cleared once the server has them.
 const PENDING_KEY    = 'bbn.pending';
-const SNAP_MAX       = 30;
+// How many notes the store holds. Enforced on write (saveSnapshot) and on merge
+// (mergeRecents), so exceeding it drops the oldest silently — which is why the number
+// matters and why it is 200 rather than something rounder.
+//
+// 200 is the server's own MAX_NOTES_PER_REQUEST (api/notes-store.js). pushNow sends
+// every snapshot in ONE request and the server slices the rest away without saying so,
+// so a local cap above 200 would trade a visible local limit for invisible loss on the
+// server. Raising it further means paginating the push first.
+//
+// Measured at 200 with realistic notes (~400 words plus a code block, 1.4KB stored
+// each): 277KB in localStorage against a ~5MB budget, 0.13ms to parse the whole list,
+// and a 677KB sync body against the 6MB cap in server.js — roughly 9x headroom.
+//
+// That 677KB is per PUSH, not per session, and it is the real cost of this number.
+// pushNow sends every note decompressed on every push, and schedulePush fires one
+// PUSH_DELAY (2s) after any edit — so a full store now ships ~6.7x what it did at 30
+// while you type. Within every limit, but not free, and worst on a phone.
+//
+// Fixing that means sending only notes that changed, which is a protocol change
+// (per-note dirty tracking on both sides), not a tuning exercise. Worth doing before
+// anyone routinely carries a few hundred notes.
+const SNAP_MAX       = 200;
 
 // Sidebar background presets. Generated CSS art, not photographs: byebyenotes has
 // no asset pipeline, and a gradient costs ~200 bytes where an image costs hosting.
