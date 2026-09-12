@@ -140,7 +140,7 @@ function normalizeSlug(raw, max) {
 
 // Returns a row-ready note, or null if it cannot be stored at all. Null is a
 // skip, not an error: one unparseable note must not fail a whole sync and strand
-// the other twenty-nine.
+// every other note in the batch.
 function sanitizeNote(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const nid = normalizeNid(raw.nid);

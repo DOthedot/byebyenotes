@@ -51,6 +51,7 @@ browser globals to fake, and running it under jsdom would only hide that fact.
 | `stripFormatting` | `markdown.test.js` | Remove one format category's markers from a region. |
 | `mergeRecents` | `sync.test.js` | Merge local + remote recent-note snapshots. |
 | `groupByFolder` | `sync.test.js` | Split snapshots into loose notes + sorted folders. |
+| `SNAP_MAX` (via `mergeRecents`) | `sync.test.js` | Pins the note-store ceiling to the server's `MAX_NOTES_PER_REQUEST`. pushNow sends every snapshot in one request and the server slices the rest away silently, so the two constants must not drift apart. |
 | `nextNavIndex` | `home-nav.test.js` | Next Home-screen selection index for Arrow keys (wrap; `-1` = none). |
 | `buildCommandList` | `help.test.js` | The ⌘K command list — asserted against as the source of the help COMMANDS section. |
 | `buildHelpList` | `help.test.js` | Read-only `/help` reference: intro + COMMANDS (from `buildCommandList`) + SHORTCUTS + FORMATTING. |
@@ -176,7 +177,7 @@ helper building snapshots `{ nid, t, title, folder, blockCount, langs }` (`t` = 
 | Test | Asserts | Why |
 |------|---------|-----|
 | `mergeRecents keeps newest entry per note id` | For the same `nid`, the higher-`t` entry wins (title becomes `a-newer`); result ordered newest-first → `['a','c','b']`. | Two devices editing the same note must converge on the latest, not duplicate it. |
-| `mergeRecents sorts newest-first and caps at 30` | 35 inputs → 30 kept, `merged[0].nid==='n34'` (highest `t`). | The recents list is bounded; only the freshest 30 survive. |
+| `mergeRecents sorts newest-first and caps the list` | 400 inputs → capped, newest first, and the survivors are the newest `t` values rather than an arbitrary slice. Asserts no literal cap, so moving `SNAP_MAX` doesn't rot the test. | The recents list is bounded, and capping must drop the OLDEST. |
 | `groupByFolder splits loose notes from sorted folders` | Foldered notes group under **alphabetically sorted** folder names (`['ideas','work']`); within a folder, notes keep newest-first order; un-foldered notes go to `loose`. | Drives the collapsible-folder start screen. |
 | `groupByFolder treats blank folder as loose` | A folder of `'  '` (whitespace) counts as no folder → both notes land in `loose`, `folders` empty. | Prevents phantom blank folders. |
 | `mergeRecents tolerates null/invalid input` | `mergeRecents(null, undefined) → []`; `[null, {}, snap('a',1)]` filters junk → `['a']`. | Corrupt localStorage / API payloads must never crash the start screen. |
@@ -321,7 +322,7 @@ never markup, never a resurrected note.
 | `normalizeFolder` | Trims and joins like `app.js folderSegments`; collapses `//`; top level is `null` and never `''` (which `notes_folder_shape` rejects); caps depth at 12 — the same cap that stopped `renderSidebar` blowing the stack; rejects over-long paths and non-strings, so `{}` can't become a folder named `[object Object]`. |
 | `sanitizeBlocks` | Unknown block types degrade to `text`; `lang` is slug-only because it becomes a highlight.js **class name**; non-string content becomes `''`, not `"[object Object]"`; a non-array is `null` (matching `notes_blocks_is_array`); oversize is `null` (matching `notes_blocks_size`). |
 | `sanitizeNote` | Unusable `nid` → dropped; missing title → `'untitled'` rather than a NOT NULL violation; title truncated to the same 48 chars `/rename` allows; `titlePinned` is strictly boolean, so a truthy string can't pin a title. |
-| `sanitizeNotes` | One broken note doesn't strand the other twenty-nine; a duplicate `nid` collapses to the last — Postgres refuses to let one upsert touch a row twice, which would fail the whole push; batch is capped. |
+| `sanitizeNotes` | One broken note doesn't strand every other note in the batch; a duplicate `nid` collapses to the last — Postgres refuses to let one upsert touch a row twice, which would fail the whole push; batch is capped. |
 | `sanitizePrefs` | Strips the wallpaper (it has its own column and its own budget); rejects rather than truncates over 32KB — half-written prefs are worse than stale ones; only a plain object qualifies. |
 | `sanitizeImage` | Inline `data:` images only — a remote URL would make every sidebar render fetch a third party; rejects `data:text/html`, `javascript:`, and anything over the column cap. |
 | `rowToNote` | `updated_at_ms` arrives from `pg` as a **string** (bigint) and must become a number, or `mergeRecents` sorts wrong; tombstones are flagged. |
