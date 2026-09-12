@@ -90,6 +90,9 @@ const HLJS_THEME_URLS = {
   'catppuccin-mocha': 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/tomorrow-night.min.css',
 };
 
+// Fetched on first use by loadScriptOnce, not from index.html — see the note there.
+const JSZIP_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+
 const URL_SAFE_LIMIT = 8000;   // conservative cross-browser URL length budget
 const QR_MAX_CHARS   = 2800;   // QR version 40, level L, 8-bit capacity ≈ 2953
 const SNAP_KEY       = 'bbn.recent';
@@ -389,6 +392,9 @@ let formatSel        = null;    // { blockId, range } saved while the format pal
 const collapsedFolders = new Set();
 let copiedTimer  = null;
 let pendingExport  = null;      // 'md' | 'pdf' | 'docx' | 'html'
+// What to run once the sync passphrase prompt succeeds. /exportAll opens that prompt
+// when sync is off, and has to pick up where it left off afterwards.
+let paletteAfter   = null;      // 'exportAll' | null
 let focusMode    = false;
 let shareOpen    = false;
 let emptyVisible = false;
@@ -1548,6 +1554,7 @@ function buildCommandList() {
     { id: 'font',   label: '/font',   ico: 'Aa', desc: 'change font' },
     { id: 'settings', label: '/settings', ico: '⚙', desc: 'sidebar background & panel' },
     { id: 'export', label: '/export', ico: '⇩',  desc: 'md · pdf · docx · html' },
+    { id: 'exportAll', label: '/exportAll', ico: '⇩⇩', desc: 'every note as a zip vault' },
     { id: 'sync',   label: '/sync',   ico: '⟲',  desc: syncKey ? 'turn off cross-device sync' : 'sync notes across devices', hint: syncKey ? 'on' : null },
     { id: 'delete', label: '/delete', ico: '✕',  desc: 'delete current block' },
     { id: 'home',    label: '/home',    ico: '⌂', desc: 'back to the start screen' },
@@ -1691,6 +1698,9 @@ function openPalette(mode, opts = {}) {
   paletteMode  = mode;
   paletteIndex = keptIndex;
   paletteOpen  = true;
+  // Only the prompt that was opened WITH an `after` may run it; anything else
+  // opening in between clears it, so a stale flag cannot fire a surprise export.
+  paletteAfter = opts.after || null;
   if (opts.anchor !== undefined) {
     paletteAnchor = opts.anchor;
     // Remember where the caret sat so closePalette can put it back — .focus() alone
@@ -1753,6 +1763,12 @@ function openPalette(mode, opts = {}) {
     paletteItems = [
       { id: '__none', label: 'no folder', ico: '—', desc: 'top level' },
       ...folders.map(f => ({ id: f, label: f + '/', ico: '▸' })),
+    ];
+  } else if (mode === 'exportAllOffline') {
+    paletteTitle.textContent = "COULDN'T REACH YOUR SYNCED NOTES";
+    paletteItems = [
+      { id: 'ea-local',  label: 'export this device only', ico: '⇩', desc: 'notes saved in this browser' },
+      { id: 'ea-cancel', label: 'cancel',                  ico: '✕', desc: 'try again later' },
     ];
   } else if (mode === 'newItem') {
     paletteTitle.textContent = nextFolderParent ? `CREATE IN ${nextFolderParent}/` : 'CREATE';
@@ -1978,6 +1994,7 @@ function closePalette() {
   paletteOpen = false;
   paletteMode = null;
   paletteAnchor = null;
+  paletteAfter = null;
   changeLangTarget = null;
   paletteOverlay.classList.add('hidden');
   paletteOverlay.classList.remove('preview');
@@ -2023,7 +2040,7 @@ function paletteEscTarget(mode, hasAnchor) {
   if (mode === 'command' || mode === 'insert' || mode === 'format') return 'close';
   if (mode === 'newFolder') return 'newItem';
   if (mode === 'rename') return 'command';
-  if (mode === 'help' || mode === 'settings' || mode === 'newItem') return 'command';
+  if (mode === 'help' || mode === 'settings' || mode === 'newItem' || mode === 'exportAllOffline') return 'command';
   if (mode === 'lang' && hasAnchor) return 'insert';
   return 'command';
 }
@@ -2115,7 +2132,21 @@ function confirmPalette() {
       paletteTitle.textContent = 'Sync passphrase — too short, use 6+ chars';
       return;
     }
+    // Captured before closePalette, which clears it.
+    const after = paletteAfter;
     closePalette();
+    if (after === 'exportAll') {
+      // enableSync is async and pulls internally before resolving, so the export has
+      // to wait for it — resuming synchronously would find syncKey still null and
+      // re-open this very prompt, in a loop. It also swallows its own failures
+      // (toasting and leaving syncKey null rather than rejecting), so success is read
+      // off syncKey, never off the promise. localOnly, because it has already pulled.
+      enableSync(phrase).then(() => {
+        if (syncKey) exportAll({ localOnly: true });
+        else openPalette('exportAllOffline');
+      });
+      return;
+    }
     enableSync(phrase);
     return;
   }
@@ -2177,6 +2208,7 @@ function confirmPalette() {
       maybeShowEmptyState();
       return;
     }
+    if (selected.id === 'exportAll') { closePalette(); exportAll(); return; }
     if (selected.id === 'newNote') { startNewNote(); return; }
     if (selected.id === 'newFolder') { openPalette('newFolder'); return; }
     if (selected.id === 'rename')    { renameTarget = noteId; openPalette('rename'); return; }
@@ -2186,6 +2218,15 @@ function confirmPalette() {
       return;
     }
     openPalette(selected.id);
+    return;
+  }
+
+  // Its own branch, like newItem: confirmPalette dispatches on paletteMode, and the
+  // 'command' branch below only ever sees mode === 'command'. Handlers left in there
+  // for this prompt's rows are unreachable — both buttons did nothing.
+  if (paletteMode === 'exportAllOffline') {
+    closePalette();
+    if (selected.id === 'ea-local') exportAll({ localOnly: true });
     return;
   }
 
@@ -3381,6 +3422,58 @@ function downloadBlob(blob, filename) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// Holds the whole vault in memory at once. Comfortable for the hundreds of notes this
+// is actually used with; buildExportTree is kept zip-free precisely so swapping in a
+// streaming writer later touches only this function.
+async function writeExportZip(tree) {
+  await loadScriptOnce(JSZIP_URL);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const zip = new JSZip();
+  const root = zip.folder('byebyenotes-' + stamp);
+  root.file('manifest.json', JSON.stringify(tree.manifest, null, 2));
+  // Empty folders have to be created explicitly — no file inside them implies one,
+  // and without this the exported vault quietly loses every folder you made but
+  // have not written in yet.
+  tree.manifest.folders.forEach(f => root.folder(f));
+  tree.files.forEach(f => root.file(f.path, f.text));
+  downloadBlob(await zip.generateAsync({ type: 'blob' }), 'byebyenotes-' + stamp + '.zip');
+}
+
+// Pulls before exporting, because the passphrase is the only thing that reaches notes
+// living on other devices — a zip built from localStorage alone is this browser's
+// notes, not "all" of them.
+//
+// A failed pull STOPS and asks rather than quietly exporting what is local. Handing
+// back a file that looks like a complete backup and is not is the exact failure this
+// feature exists to prevent.
+async function exportAll(opts) {
+  const localOnly = !!(opts && opts.localOnly);
+  syncNow();                       // flush the open note into bbn.recent first
+  if (!localOnly) {
+    if (!syncKey) return openPalette('syncPhrase', { after: 'exportAll' });
+    try {
+      flashCopied('fetching your synced notes…');
+      await syncPull();
+    } catch (e) {
+      return openPalette('exportAllOffline');
+    }
+  }
+  const tree = buildExportTree(loadSnapshots(), loadFolders());
+  if (!tree.files.length) return flashCopied('nothing to export');
+  try {
+    await writeExportZip(tree);
+  } catch (e) {
+    return flashCopied('could not build the zip — check your connection');
+  }
+  const n = tree.files.length;
+  const f = tree.manifest.folders.length;
+  flashCopied(
+    `exported ${n} note${n === 1 ? '' : 's'}` +
+    (f ? ` · ${f} folder${f === 1 ? '' : 's'}` : '') +
+    (tree.skipped ? ` · ${tree.skipped} unreadable, skipped` : '')
+  );
 }
 
 function exportMd(filename = 'notes') {

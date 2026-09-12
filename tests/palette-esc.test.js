@@ -34,6 +34,14 @@ test('newItem backs out to the command menu', () => {
   expect(mod.paletteEscTarget('newItem', false)).toBe('command');
 });
 
+test('the export-offline prompt backs out to the command menu', () => {
+  // Same destination as the fallthrough default, so this pins the behaviour rather
+  // than adding it: escaping "couldn't reach your synced notes" must not become a
+  // silent local-only export, and must not strand you in a dead prompt, if that
+  // default ever changes.
+  expect(mod.paletteEscTarget('exportAllOffline', false)).toBe('command');
+});
+
 test('newFolder backs out to the create chooser, not all the way to commands', () => {
   // Escaping the folder-name prompt should return you to "new note / new folder",
   // so a mistyped name is one keystroke from being retried.
