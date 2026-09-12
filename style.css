@@ -385,9 +385,18 @@ button { font-family: inherit; }
 
 .md-mark { color: var(--fg-faint); font-weight: 400; }
 .md-h { font-weight: 600; color: color-mix(in srgb, var(--fg) 92%, white); letter-spacing: -0.015em; }
-.md-h1 { font-size: 1.5em; line-height: 1.4; margin: 0.15em 0; }
-.md-h2 { font-size: 1.25em; line-height: 1.45; margin: 0.1em 0; }
-.md-h3 { font-size: 1.1em; line-height: 1.5; }
+/* Headings keep their larger glyphs but occupy exactly ONE base line, so the line
+   box is identical to the raw text the editable shows in its place. line-height is
+   the base 1.6 divided by each font-size (1.6/1.5, 1.6/1.25, 1.6/1.1) and the margins
+   are gone, because either would make the rendered line taller than the editable one
+   and the block would resize as it gained or lost focus.
+
+   It also keeps every line the same height as its number in the gutter — in an editor
+   that shows line numbers, a heading that is 1.45 rows tall puts every number below it
+   slightly out of step with the line it labels. */
+.md-h1 { font-size: 1.5em;  line-height: calc(var(--line-height) / 1.5);  margin: 0; }
+.md-h2 { font-size: 1.25em; line-height: calc(var(--line-height) / 1.25); margin: 0; }
+.md-h3 { font-size: 1.1em;  line-height: calc(var(--line-height) / 1.1);  margin: 0; }
 .md-p { min-height: 1.6em; }
 .md-li { padding-left: 4px; }
 .md-li .md-mark { color: var(--accent); }

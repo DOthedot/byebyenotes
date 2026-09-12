@@ -4,7 +4,7 @@ global.LZString = {
 };
 
 const {
-  renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle, capacityLevel, timeAgo,
+  renderMarkdown, paintedLines, escapeHtml, toggleCheckboxLine, noteTitle, capacityLevel, timeAgo,
   stripFormatting,
 } = require('../app.js');
 
@@ -135,4 +135,110 @@ test('timeAgo formats relative time', () => {
 // ── escapeHtml ──
 test('escapeHtml escapes angle brackets, amps, quotes', () => {
   expect(escapeHtml('<a href="x">&</a>')).toBe('&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;');
+});
+
+// ── The rendered layer must produce one line box per line the editable shows ──
+// The markdown layer and the contenteditable swap in place on focus, so any line
+// either one paints that the other does not makes the block resize as you click in
+// and out — and drags the line-number gutter out of step with the text.
+describe('renderMarkdown line parity with the editable', () => {
+  const divs = (html) => (html.match(/<div/g) || []).length;
+
+  test('a trailing newline does not emit an extra line', () => {
+    // `white-space: pre-wrap` drops one trailing newline, so the editable paints two
+    // lines here, not three. The rendered layer has to agree.
+    expect(divs(renderMarkdown('- a\nb\n'))).toBe(2);
+  });
+
+  test('blank lines in the middle are kept — those ARE painted', () => {
+    expect(divs(renderMarkdown('- a\n\n\nb'))).toBe(4);
+  });
+
+  test('only ONE trailing newline is dropped, matching pre-wrap', () => {
+    // 'a\n\n\n' paints as: a, blank, blank. Three lines.
+    expect(divs(renderMarkdown('- a\n\n\n'))).toBe(3);
+  });
+
+  test('a leading newline is kept', () => {
+    expect(divs(renderMarkdown('\n- a'))).toBe(2);
+  });
+
+  test('a single line with no trailing newline is unchanged', () => {
+    expect(divs(renderMarkdown('- a'))).toBe(1);
+  });
+
+  test('text that is only newlines still renders nothing', () => {
+    expect(renderMarkdown('\n\n\n')).toBe('');
+  });
+});
+
+// ── data-line indices must survive the trailing-newline drop ──────────────────
+// renderMarkdown stamps data-line onto checkboxes and images, and toggleCheckboxLine
+// indexes into the ORIGINAL text to flip one. If dropping the trailing line shifted
+// those indices, clicking a checkbox would toggle a different line than the one you
+// clicked — silent corruption of the user's note, which no height measurement catches.
+describe('data-line indices are stable across the trailing-newline drop', () => {
+  const lineAttrs = (html) => [...html.matchAll(/data-line="(\d+)"/g)].map(m => Number(m[1]));
+
+  test('checkbox indices are identical with and without a trailing newline', () => {
+    const body = '- [ ] first\nsome prose\n- [x] second';
+    expect(lineAttrs(renderMarkdown(body))).toEqual(lineAttrs(renderMarkdown(body + '\n')));
+  });
+
+  test('a stamped index still addresses the same line in the source text', () => {
+    const text = 'intro\n- [ ] buy milk\n- [ ] walk dog\n';
+    const idxs = lineAttrs(renderMarkdown(text));
+    // The second checkbox is source line 2; toggling it must hit "walk dog".
+    const toggled = toggleCheckboxLine(text, idxs[1]);
+    expect(toggled.split('\n')[idxs[1]]).toBe('- [x] walk dog');
+    expect(toggled.split('\n')[1]).toBe('- [ ] buy milk');   // untouched
+  });
+
+  test('indices are unaffected by however many trailing newlines there are', () => {
+    const body = '- [ ] a\n- [ ] b';
+    const base = lineAttrs(renderMarkdown(body));
+    expect(lineAttrs(renderMarkdown(body + '\n'))).toEqual(base);
+    expect(lineAttrs(renderMarkdown(body + '\n\n'))).toEqual(base);
+  });
+});
+
+// ── The gutter, the editable and the rendered layer must agree on line count ──
+// These three drifted pairwise before: the rendered layer painted a row the editable
+// did not, and the gutter numbered a row neither drew. One shared helper now answers
+// the question, so a future change cannot desynchronise two of the three.
+describe('paintedLines', () => {
+  test('a trailing newline does not add a line — pre-wrap does not paint it', () => {
+    expect(paintedLines('a\nb\n')).toEqual(['a', 'b']);
+  });
+
+  test('only one trailing newline is dropped', () => {
+    expect(paintedLines('a\n\n')).toEqual(['a', '']);
+  });
+
+  test('interior blank lines are kept', () => {
+    expect(paintedLines('a\n\n\nb')).toEqual(['a', '', '', 'b']);
+  });
+
+  test('a leading newline is kept', () => {
+    expect(paintedLines('\na')).toEqual(['', 'a']);
+  });
+
+  test('empty and null are one empty line, never zero', () => {
+    expect(paintedLines('')).toEqual(['']);
+    expect(paintedLines(null)).toEqual(['']);
+    expect(paintedLines(undefined)).toEqual(['']);
+  });
+
+  test('a lone newline collapses to one line, not two', () => {
+    expect(paintedLines('\n')).toEqual(['']);
+  });
+
+  test('the gutter count and the rendered line count agree', () => {
+    // renderMarkdown emits one div per painted line, so the two must match for any
+    // input — that agreement is the whole point of sharing the helper.
+    for (const text of ['- a\nb', '- a\nb\n', '- a\n\n', '\n- a', '- a\n\n\nb\n']) {
+      const divs = (renderMarkdown(text).match(/<div/g) || []).length;
+      expect(divs).toBe(paintedLines(text).length);
+    }
+  });
 });
