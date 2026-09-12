@@ -637,6 +637,111 @@ function groupByFolder(snaps) {
 // here means a hand-edited or synced value with stray slashes still renders.
 const FOLDER_MAX_DEPTH = 12;   // deeper than anyone nests; keeps the walk bounded
 
+// Fetches a CDN script on first use. Everything in index.html is render-blocking and
+// not deferred (AGENTS.md gotcha 7), so anything added there is paid for on every cold
+// start — a ~95KB dependency that only the export commands need does not belong in
+// that list.
+//
+// A rejected load is deliberately NOT cached. A failure here is usually a dropped
+// connection, and caching the rejection would make every retry for the rest of the
+// session fail without going near the network.
+const scriptPromises = {};
+
+function loadScriptOnce(url) {
+  if (scriptPromises[url]) return scriptPromises[url];
+  scriptPromises[url] = new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = url;
+    el.async = true;
+    el.onload = () => resolve();
+    el.onerror = () => {
+      delete scriptPromises[url];
+      el.remove();
+      reject(new Error('failed to load ' + url));
+    };
+    document.head.appendChild(el);
+  });
+  return scriptPromises[url];
+}
+
+// Test seam only: the promise cache is module-global and would otherwise leak
+// between cases.
+function __resetScriptCache() {
+  Object.keys(scriptPromises).forEach(k => delete scriptPromises[k]);
+}
+
+// A note title is free text; a filename is not. Strips what Windows and macOS
+// reject, collapses whitespace so a pasted heading does not become a two-line name,
+// and caps length well under the 255-byte limit every filesystem shares.
+//
+// Never returns '': a nameless entry in a zip is worse than an ugly one. The same
+// trimming also disposes of '.' and '..', which would otherwise unpack outside their
+// own folder — the title is user input, and it ends up as a path.
+const FILENAME_MAX = 80;
+// Budget for a whole path inside the zip. Under Windows' 260-character MAX_PATH with
+// room left for the archive's own "byebyenotes-YYYY-MM-DD/" root and for whatever
+// directory the user extracts into.
+const EXPORT_PATH_MAX = 200;
+// Reserved on Windows with or without an extension — CON.md is still the console
+// device — so a note honestly titled "con" or "aux" would produce a file that cannot
+// be written there. Matched on the whole name, never as a substring: "console notes"
+// is fine.
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+// Character-level cleaning, with no opinion about what to do when nothing survives.
+// Split out because the two callers want opposite things from that case: a FILE needs
+// some name and falls back to the nid, while a PATH SEGMENT is better dropped than
+// turned into a directory called "untitled".
+function cleanNameChars(s) {
+  return String(s || '')
+    .replace(/[\/\\:*?"<>|]/g, '')      // illegal on Windows; '/' and ':' on macOS
+    .replace(/[\x00-\x1f\x7f]/g, '')    // control characters
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[. ]+|[. ]+$/g, '')      // leading/trailing dots and spaces
+    .slice(0, FILENAME_MAX)
+    .replace(/[. ]+$/, '');             // the slice can re-expose a trailing dot
+}
+
+// Always returns ONE safe path segment: no separators, no traversal, never empty.
+//
+// The fallback goes through the same cleaning as the title. Every caller passes the
+// note's nid, which looks like a generated id and is not one you can trust —
+// loadState() reads it straight out of a decoded share-link hash with no validation
+// and saveSnapshot stores it verbatim, so a crafted link puts an arbitrary string
+// here. It becomes the filename for any note whose title sanitises away, which a
+// crafted link also controls.
+function safeFileName(title, fallback) {
+  const primary = cleanNameChars(title);
+  if (primary && !WINDOWS_RESERVED.test(primary)) return primary;
+  const secondary = cleanNameChars(fallback);
+  if (secondary && !WINDOWS_RESERVED.test(secondary)) return secondary;
+  return 'untitled';
+}
+
+// Folder paths get the same treatment as titles, one segment at a time.
+//
+// folderSegments alone is not enough here. It was written for the sidebar tree, where
+// a segment called '..' is an inert label — but the same string becomes a real path
+// inside a zip somebody later unpacks, and '../../etc' escapes the export directory
+// entirely. `folder` is untrusted (it arrives from other devices via /api/sync,
+// AGENTS.md gotcha 9), so it is sanitised where it turns into a path, not where it
+// turns into a label. Segments that sanitise away are dropped rather than replaced,
+// so 'work/../api' flattens to 'work/api' instead of gaining a junk directory.
+function safePathSegments(folder) {
+  return folderSegments(folder)
+    .map(seg => {
+      if (/^[.]+$/.test(seg)) return '';          // '.' and '..' — the traversal case
+      const cleaned = cleanNameChars(seg);
+      // A reserved device name is unwritable on Windows but is a perfectly ordinary
+      // thing to call a folder. Suffix it rather than discarding what the user named
+      // it — falling back to 'untitled' would both lose the name and let two such
+      // folders collide into one directory.
+      return WINDOWS_RESERVED.test(cleaned) ? cleaned + '_' : cleaned;
+    })
+    .filter(Boolean);                             // a segment of pure junk is dropped
+}
+
 function folderSegments(folder) {
   // `folder` is untrusted: it comes from localStorage and from other devices via
   // /api/sync. Unbounded depth recursed until the stack blew inside renderSidebar,
@@ -3163,13 +3268,94 @@ async function uploadPastedImage(file, blockId) {
 }
 
 // ── Export ────────────────────────────────────────────────────────────────────
-function markdownString() {
-  return blocks.map(b => {
-    const text = getBlockText(b);
+// Serialises blocks to markdown. Takes its input rather than reading the global
+// `blocks[]`, because exporting every note means serialising notes other than the
+// open one. Lossless in practice: a block is only ever 'text' or 'code', and
+// markdown represents both exactly — which is what will let an exported vault be
+// read back in.
+function blocksToMarkdown(list) {
+  return (list || []).map(b => {
+    const text = typeof b.content === 'string' ? b.content : '';
     return b.type === 'code'
       ? '```' + (b.lang || '') + '\n' + text + '\n```'
       : text;
   }).join('\n\n');
+}
+
+// Computes the whole exported vault as plain data — paths and text — with no zip
+// involved. Keeping the layout rules here rather than inside the zip writer is what
+// makes them testable, and what would make a streaming writer a contained swap if
+// holding everything in memory ever stops being enough.
+//
+// `folders` is prefs.folders: the folders that exist with no note in them. They have
+// to be carried explicitly, because nothing in the snapshot list implies them — and
+// without them an exported vault silently loses every empty folder the sidebar shows.
+function buildExportTree(snaps, folders) {
+  const files = [];
+  const notes = [];
+  const used = new Set();            // "<dir>\n<name>" already taken
+  const folderSet = new Set();
+  let skipped = 0;
+
+  (folders || []).forEach(f => {
+    const clean = safePathSegments(f).join('/');
+    if (clean) folderSet.add(clean);
+  });
+
+  (snaps || []).forEach(s => {
+    if (!s || !s.nid) return;
+    const state = decodeState(s.hash || '');
+    // No blocks means nothing to write. An empty file would read as "this note was
+    // empty" rather than "this note could not be read", so count it and say so.
+    if (!state || !Array.isArray(state.blocks)) { skipped++; return; }
+
+    const dir = safePathSegments(s.folder).join('/');
+    if (dir) folderSet.add(dir);
+
+    // Windows refuses paths over 260 characters, and 12 levels of nesting at 80
+    // characters each clears that without anything malicious — an ordinary deep vault
+    // does it. Capping each segment is not enough; the joined length is what fails, so
+    // the filename gives way to keep the note extractable. Budgeted under 260 to leave
+    // room for the zip's own "byebyenotes-YYYY-MM-DD/" root and the ".md".
+    const room = Math.max(8, EXPORT_PATH_MAX - (dir ? dir.length + 1 : 0) - 3);
+    const base = safeFileName(s.title, s.nid).slice(0, room).replace(/[. ]+$/, '') || 'untitled';
+
+    let name = base;
+    // Keyed on "\n" so a folder named "a" with note "b" cannot collide with a folder
+    // "a\nb" — a separator that can appear in neither half.
+    for (let n = 2; used.has(dir + '\n' + name); n++) name = `${base} (${n})`;
+    used.add(dir + '\n' + name);
+
+    const path = (dir ? dir + '/' : '') + name + '.md';
+    files.push({ path, text: blocksToMarkdown(state.blocks) });
+    notes.push({
+      path,
+      nid: s.nid,
+      title: s.title || '',
+      renamed: !!s.renamed,
+      theme: state.theme || null,
+      font: state.font || null,
+      folder: dir || null,
+    });
+  });
+
+  return {
+    files,
+    skipped,
+    manifest: {
+      version: 1,
+      exported: new Date().toISOString(),
+      folders: [...folderSet].sort(),
+      notes,
+    },
+  };
+}
+
+// The open note reads through getBlockText rather than b.content: a rendered text
+// block has its editable hidden, and its freshest keystrokes live in the DOM until
+// the next sync. Every other note has no DOM at all, so it uses b.content directly.
+function markdownString() {
+  return blocksToMarkdown(blocks.map(b => ({ type: b.type, lang: b.lang, content: getBlockText(b) })));
 }
 
 function blocksToHtml() {
@@ -4443,6 +4629,6 @@ if (typeof module !== 'undefined') {
     normalizeSurfaceBg, SURFACE_BG_DEFAULTS, customFingerprint, wallpapersFor, buildSyncPrefs,
     normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
-    snapshotToWireNote, wireNoteToSnapshot,
+    snapshotToWireNote, wireNoteToSnapshot, blocksToMarkdown, safeFileName, safePathSegments, buildExportTree, loadScriptOnce, __resetScriptCache,
   };
 }
