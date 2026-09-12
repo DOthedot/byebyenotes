@@ -464,9 +464,23 @@ function renderInlineMd(escaped) {
 
 // Line-based markdown renderer. Returns '' when nothing renders differently
 // from plain text, so plain blocks skip the render layer entirely.
+// The lines a browser actually PAINTS for this text. `split('\n')` turns a trailing
+// newline into a final empty element, but CSS `white-space: pre-wrap` does not paint
+// one — so splitting alone over-counts by a row for any text ending in a newline.
+//
+// Shared, because three things have to agree on the answer: the editable, the
+// rendered markdown layer that swaps with it, and the line-number gutter beside them.
+// They disagreed pairwise before: the rendered layer was a row taller than the
+// editable, and the gutter numbered a row neither of them drew.
+function paintedLines(text) {
+  const lines = String(text == null ? '' : text).split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
 function renderMarkdown(text) {
   if (!text || !text.trim()) return '';
-  const lines = text.split('\n');
+  const lines = paintedLines(text);
   let anyMd = false;
   const html = lines.map((line, i) => {
     let m;
@@ -1270,7 +1284,10 @@ function updateLineCount(blockId) {
   const counter = el.querySelector('.line-count');
   if (!counter) return;
   const text = el.querySelector('.block-content')?.innerText || '';
-  const n = text.trim() ? text.split('\n').length : 0;
+  // Same paintedLines the gutter uses. This badge sits in the code block's header,
+  // directly above the numbers in .blk-lines — counting differently meant code
+  // ending in a newline showed "4 ln" beside a column numbered to 3.
+  const n = text.trim() ? paintedLines(text).length : 0;
   counter.textContent = n ? `${n} ln` : '';
 }
 
@@ -2550,7 +2567,10 @@ function renderLineNumbers() {
     if (!el) return;
     const box = el.querySelector('.blk-lines');
     if (!box) return;
-    const count = Math.max(1, getBlockText(block).split('\n').length);
+    // paintedLines, not split('\n'): a note ending in a newline was numbered one row
+    // past its last line, so every number sat against the right text but the column
+    // ran on past the end of the note.
+    const count = Math.max(1, paintedLines(getBlockText(block)).length);
     let html = '';
     for (let i = 0; i < count; i++) html += `<span>${++n}</span>`;
     box.innerHTML = html;
@@ -4413,7 +4433,7 @@ function nextNavIndex(current, key, count) {
 if (typeof module !== 'undefined') {
   module.exports = {
     encodeState, decodeState, createBlock, buildBlockEl, insertDividerBlocks,
-    renderMarkdown, escapeHtml, toggleCheckboxLine, noteTitle,
+    renderMarkdown, paintedLines, escapeHtml, toggleCheckboxLine, noteTitle,
     capacityLevel, timeAgo, mergeRecents, truncateTitle, tabTitle, groupByFolder, stripTitleMarkup, folderSegments, buildTreeRows, stripFormatting,
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
     langIcon, langBadgeHtml, soleLang, fileLabel, paletteEscTarget, restorableCaret, caretScrollDelta,
