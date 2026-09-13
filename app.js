@@ -1207,57 +1207,100 @@ async function syncPull() {
   return { truncated: !!data.truncated };
 }
 
-function pushNow() {
+// Notes go up in batches. The server slices anything past MAX_NOTES_PER_REQUEST off
+// the end of a push and says nothing about it, so a single request carrying more than
+// that loses the remainder silently — the same failure the paged pull just removed on
+// the way down. SNAP_MAX equals that limit today, so this never splits in practice;
+// it exists so raising the cap is a one-line change rather than a data-loss bug.
+//
+// Kept in step with the server by a test rather than by hope — see tests/sync.test.js.
+const PUSH_BATCH = 200;
+
+function chunk(list, size) {
+  if (list.length <= size) return [list];
+  const out = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
+async function pushNow() {
   if (!syncKey) return;
   clearTimeout(pushTimer);
 
   const pending = loadPending();
   const { prefs, sidebarImage } = buildSyncPrefs(loadPrefs(), sidebarImageDirty);
+  const notes = loadSnapshots().map(snapshotToWireNote).filter(Boolean);
 
-  const body = {
-    notes:          loadSnapshots().map(snapshotToWireNote).filter(Boolean),
-    // Deliberate creations only. Notes can safely be re-sent in full because their
-    // upsert refuses tombstoned rows server-side; the folders upsert deliberately
-    // *un*-deletes, so sending the whole list here would resurrect deleted folders.
+  // Everything that is not a note rides on the FIRST batch only. Repeating deletions
+  // and prefs on every batch would re-apply them needlessly, and prefs carries a `t`
+  // the server compares — sending it twice invites a laggy second copy to lose to the
+  // first for no reason. An empty note list still sends one request, because the
+  // deletions and prefs in it are the whole point of that push.
+  const batches = chunk(notes, PUSH_BATCH);
+  const sentImage = sidebarImageDirty;
+  if (sidebarImageDirty) sidebarImageDirty = false;
+
+  const first = {
     folders:        pending.newFolders,
     deletedNotes:   pending.deletedNotes,
     deletedFolders: pending.deletedFolders,
     prefs,
   };
-
   // The wallpaper is only sent when it actually changed. Omitting the key tells the
   // server to leave the stored image alone — otherwise every two-second autosave
   // would ship 120KB of base64 that nobody asked for.
-  if (sidebarImageDirty) {
-    body.sidebarImage = sidebarImage;
-    sidebarImageDirty = false;
+  if (sentImage) first.sidebarImage = sidebarImage;
+
+  const fail = (msg) => {
+    // Put the image back on the queue: the server never received it.
+    if (sentImage) sidebarImageDirty = true;
+    flashCopied(msg);
+  };
+
+  // Sequential, not parallel: a vault large enough to split is large enough that
+  // firing every batch at once would open that many database transactions together.
+  //
+  // The cost is that batches after the first are dispatched only once the previous
+  // response lands, so `keepalive` — which protects a request already in flight —
+  // cannot save them if the tab closes mid-sequence. That is survivable ONLY because
+  // this function re-sends every note on every push: an unsent tail is still in
+  // localStorage and goes up next time.
+  //
+  // READ THIS BEFORE BUILDING DIRTY TRACKING. Sending only changed notes removes that
+  // safety net. A note marked clean when its batch was never dispatched would stop
+  // being sent at all, and the tab-close window turns from a delay into permanent
+  // divergence. Whatever marks a note clean has to do it per batch, after that
+  // batch's response, never up front for the whole push.
+  try {
+    for (let i = 0; i < batches.length; i++) {
+      const body = Object.assign({ notes: batches[i] }, i === 0 ? first : null);
+      const res = await fetch('/api/sync', {
+        method: 'PUT',
+        keepalive: true,   // survives tab close mid-request
+        headers: { 'x-sync-key': syncKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      // A rejected PUT used to vanish into .catch(() => {}), so sync could be dead
+      // for hours without a sign. A failure part-way through a multi-batch push stops
+      // the rest: the notes already sent are upserts and will be re-sent next time, so
+      // stopping costs nothing and pressing on would just pile errors up.
+      if (!res.ok) {
+        return fail(res.status === 403
+          ? 'sync failed — that passphrase belongs to a different account'
+          : `sync failed (${res.status})`);
+      }
+    }
+  } catch (e) {
+    return fail('sync failed — server unreachable');
   }
 
-  fetch('/api/sync', {
-    method: 'PUT',
-    keepalive: true,   // survives tab close mid-request
-    headers: { 'x-sync-key': syncKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }).then(res => {
-    // A rejected PUT used to vanish into .catch(() => {}), so sync could be dead
-    // for hours without a sign.
-    if (!res.ok) {
-      // Put the image back on the queue: the server never received it.
-      if (body.sidebarImage !== undefined) sidebarImageDirty = true;
-      flashCopied(res.status === 403
-        ? 'sync failed — that passphrase belongs to a different account'
-        : `sync failed (${res.status})`);
-      return;
-    }
-    // Only now are these durable somewhere other than this browser.
-    clearPending({
-      deletedNotes:   body.deletedNotes,
-      deletedFolders: body.deletedFolders,
-      newFolders:     body.folders,
-    });
-  }).catch(() => {
-    if (body.sidebarImage !== undefined) sidebarImageDirty = true;
-    flashCopied('sync failed — server unreachable');
+  // Only now are these durable somewhere other than this browser, and only now is
+  // EVERY batch through — clearing after the first would drop a deletion whose push
+  // later failed.
+  clearPending({
+    deletedNotes:   first.deletedNotes,
+    deletedFolders: first.deletedFolders,
+    newFolders:     first.folders,
   });
 }
 
@@ -4802,6 +4845,7 @@ if (typeof module !== 'undefined') {
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
     normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS, SIDEBAR_STEPS,
     normalizeSurfaceBg, SURFACE_BG_DEFAULTS, customFingerprint, wallpapersFor, buildSyncPrefs,
+    PUSH_BATCH, chunk,
     normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
     snapshotToWireNote, wireNoteToSnapshot, blocksToMarkdown, safeFileName, safePathSegments, buildExportTree, loadScriptOnce, __resetScriptCache,
