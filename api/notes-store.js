@@ -247,6 +247,32 @@ function sanitizeImage(raw) {
   return s;
 }
 
+// A page cursor is the last row's (updated_at, nid). Both halves are needed:
+// updated_at is not unique — a push writes a whole batch in one transaction, so
+// hundreds of rows can share a timestamp — and paging on it alone would either skip
+// rows or repeat them forever at a tie boundary.
+//
+// Opaque to the client on purpose: it is echoed back to us and must not become a
+// place to inject a predicate. Parsed strictly, and a cursor that does not parse is
+// treated as absent rather than as an error, so a stale one restarts the pull instead
+// of breaking sync.
+function encodeCursor(row) {
+  return Buffer.from(`${row.updated_at_ms}:${row.client_nid}`, 'utf8').toString('base64url');
+}
+
+function decodeCursor(raw) {
+  if (typeof raw !== 'string' || raw.length > 256) return null;
+  let s;
+  try { s = Buffer.from(raw, 'base64url').toString('utf8'); } catch (e) { return null; }
+  const at = s.indexOf(':');
+  if (at < 1) return null;
+  const ms = Number(s.slice(0, at));
+  const nid = s.slice(at + 1);
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(nid)) return null;   // same shape normalizeNid allows
+  return { ms, nid };
+}
+
 // ── Row → wire ───────────────────────────────────────────────────────────────
 // `t` is the row's updated_at as epoch ms, because that is the field the client's
 // mergeRecents already sorts on. Note it is the SERVER's clock: a device with a
@@ -273,6 +299,7 @@ module.exports = {
   wellFormed, sliceCodePoints,
   normalizeFolder, normalizeNid, sanitizeBlocks, sanitizeNote, sanitizeNotes,
   sanitizeFolders, sanitizeNids, sanitizePrefs, sanitizeImage,
+  encodeCursor, decodeCursor,
   rowToNote, rowToFolder,
   MAX_NOTES_PER_REQUEST, MAX_BLOCK_BYTES, MAX_PREFS_BYTES, MAX_IMAGE_BYTES, FOLDER_MAX_DEPTH,
 };

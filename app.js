@@ -1055,12 +1055,53 @@ async function derivePassKey(phrase) {
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// Pages until the server stops handing back a cursor. A pull used to be one request
+// capped at the server's PULL_LIMIT, which silently returned the newest page and
+// nothing else — an account holds more rows than that whenever it has created more
+// notes over its lifetime than the client's cap, because local eviction never
+// tombstones.
+//
+// PULL_MAX_PAGES is a hard stop, not a tuning knob. The loop's exit depends on the
+// server, and a server bug that always returned a cursor would spin here forever
+// inside the app's own startup path.
+const PULL_MAX_PAGES = 40;
+
+async function fetchAllPages() {
+  let cursor = null;
+  let first = null;
+  const notes = [];
+  let page = 0;
+  for (; page < PULL_MAX_PAGES; page++) {
+    const url = '/api/sync' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '');
+    const res = await fetch(url, { headers: { 'x-sync-key': syncKey } });
+    if (!res.ok) throw new Error('pull failed');
+    const { data } = await res.json();
+    if (!data) break;
+    // Everything except `notes` describes the account, not this page, so the first
+    // response wins and later pages contribute only more notes.
+    if (!first) first = data;
+    if (Array.isArray(data.notes)) notes.push(...data.notes);
+    cursor = data.nextCursor || null;
+    if (!cursor) break;
+  }
+  // Hitting the stop with a cursor still in hand means notes were left on the server.
+  // Reported as DATA, not as a toast: a toast fired from here is last-write-wins and
+  // gets overwritten by whatever the caller says next ('sync on ✓', 'exported 14
+  // notes'), so the one caller that must not ignore this — exportAll, which would
+  // otherwise call an incomplete backup a complete one — could never see it.
+  const truncated = !!cursor && page >= PULL_MAX_PAGES;
+  if (truncated) {
+    console.warn(`sync: stopped after ${PULL_MAX_PAGES} pages (${notes.length} notes); more remain unfetched`);
+  }
+  return first ? Object.assign({}, first, { notes, truncated }) : null;
+}
+
 async function syncPull() {
-  if (!syncKey) return;
-  const res = await fetch('/api/sync', { headers: { 'x-sync-key': syncKey } });
-  if (!res.ok) throw new Error('pull failed');
-  const { data } = await res.json();
-  if (!data) return;
+  // Same shape on every exit, so a caller never has to distinguish "did not run"
+  // from "ran and got everything" by checking for undefined.
+  if (!syncKey) return { truncated: false };
+  const data = await fetchAllPages();
+  if (!data) return { truncated: false };
 
   // Server tombstones are applied FIRST, so a note deleted elsewhere is gone from
   // this device before the merge below could re-adopt it from our own list.
@@ -1161,6 +1202,9 @@ async function syncPull() {
   if (emptyVisible) renderRecent();
   renderSidebar();
   renderTabline();
+  // Handed back rather than toasted here — see fetchAllPages. exportAll is the caller
+  // that must not treat a truncated pull as a complete one.
+  return { truncated: !!data.truncated };
 }
 
 function pushNow() {
@@ -1235,14 +1279,19 @@ async function enableSync(phrase) {
     // folder straight back — the very un-delete `bbn.pending` exists to prevent.
     // syncPull strips server-tombstoned paths out of prefs.folders, so reading
     // loadFolders() afterwards claims local-only folders without reviving dead ones.
-    await syncPull();
+    const pulled = await syncPull();
     loadFolders().forEach(f => addPending('newFolders', f));
     schedulePush();
     flashCopied('sync on ✓');
+    // Handed back so a caller that resumes into an export knows whether this pull
+    // actually got everything. Discarding it meant the "enable sync, then export"
+    // path skipped the truncation check that the ordinary export path performs.
+    return { truncated: !!(pulled && pulled.truncated) };
   } catch (e) {
     syncKey = null;
     try { localStorage.removeItem(SYNC_KEY_LS); } catch (err) {}
     flashCopied('sync failed — server not reachable');
+    return { truncated: false };
   }
 }
 
@@ -2162,8 +2211,8 @@ function confirmPalette() {
       // re-open this very prompt, in a loop. It also swallows its own failures
       // (toasting and leaving syncKey null rather than rejecting), so success is read
       // off syncKey, never off the promise. localOnly, because it has already pulled.
-      enableSync(phrase).then(() => {
-        if (syncKey) exportAll({ localOnly: true });
+      enableSync(phrase).then((res) => {
+        if (syncKey) exportAll({ localOnly: true, truncated: !!(res && res.truncated) });
         else openPalette('exportAllOffline');
       });
       return;
@@ -3474,12 +3523,24 @@ async function exportAll(opts) {
   syncNow();                       // flush the open note into bbn.recent first
   if (!localOnly) {
     if (!syncKey) return openPalette('syncPhrase', { after: 'exportAll' });
+    let pulled;
     try {
       flashCopied('fetching your synced notes…');
-      await syncPull();
+      pulled = await syncPull();
     } catch (e) {
       return openPalette('exportAllOffline');
     }
+    // A pull that stopped early is not a failure, so it lands here rather than in the
+    // catch — but for a backup it means the same thing: some notes are on the server
+    // and not in this zip. Reaching the same prompt is deliberate. Exporting anyway
+    // and reporting "exported N notes" would be the silent partial backup this
+    // command exists to prevent, just arriving by a different route.
+    if (pulled && pulled.truncated) return openPalette('exportAllOffline');
+  } else if (opts && opts.truncated) {
+    // localOnly skips the pull, but the resume-after-enableSync path arrives here
+    // having ALREADY pulled — and that pull can have been truncated. Without this the
+    // one route that never re-checks would report an incomplete backup as complete.
+    return openPalette('exportAllOffline');
   }
   const tree = buildExportTree(loadSnapshots(), loadFolders());
   if (!tree.files.length) return flashCopied('nothing to export');

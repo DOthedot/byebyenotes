@@ -38,31 +38,71 @@ const { resolveUser, AuthError } = require('./auth');
 // and push upserts without trimming. Any account that has created more notes over its
 // lifetime than the cap of the day already has rows no single pull returns.
 //
-// Raising the client cap 30 -> 200 makes that better, not worse: more of those rows
-// become visible again. It does not fix it. A full pull still stops at 200 silently,
-// and Import can take an account past that in one action rather than over months.
+// Raising the client cap 30 -> 200 made that better: more of those rows became
+// visible again. It did not fix it, so this is now a PAGE SIZE rather than a ceiling —
+// pull() returns a nextCursor whenever a page comes back full, and the client walks
+// every page. An account with more rows than this no longer loses the remainder
+// silently, which is what Import would otherwise have made routine.
 //
-// Before Import ships to sync users, either paginate this pull, or refuse an import
-// that would cross the line and say why.
+// Still bounded per request, for the original reason: one enormous account must not
+// hold a connection open while it streams everything it has.
 const PULL_LIMIT = 200;
 
 // Old tombstones are dropped from the pull: past this, every device has long
 // since seen the delete, and carrying them forever would grow every response.
 const TOMBSTONE_WINDOW = '90 days';
 
+// The millisecond form of updated_at, defined ONCE. The cursor is built from this
+// value, the keyset compares against it, and the ORDER BY sorts on it — if any of the
+// three used a different expression the boundary would be lossy, which is how the
+// first version of this pagination silently dropped whole push batches.
+const UPDATED_MS = `(extract(epoch from updated_at) * 1000)::bigint`;
+
 const NOTE_COLS = `
   client_nid, blocks, title, title_pinned, folder, theme, font, deleted_at,
-  (extract(epoch from updated_at) * 1000)::bigint AS updated_at_ms`;
+  ${UPDATED_MS} AS updated_at_ms`;
 
-async function pull(userId, since) {
+async function pull(userId, since, cursor) {
   const sinceClause = since ? 'AND updated_at > to_timestamp($2 / 1000.0)' : '';
   const params = since ? [userId, since] : [userId];
 
+  // Live notes are the only unbounded set — an account accumulates them and nothing
+  // trims. Tombstones are bounded by TOMBSTONE_WINDOW and folders by how many a person
+  // will plausibly make, so those keep their flat cap; if either ever needs paging it
+  // will be for a different reason than this.
+  // Paged on the MILLISECOND expression, not on updated_at itself, and the same
+  // expression appears in the cursor, the comparison and the ORDER BY.
+  //
+  // This matters more than it looks. updated_at is microsecond precision; the cursor
+  // can only carry milliseconds, because it round-trips through a JS number and Date
+  // has no finer resolution. Comparing a rounded boundary against the raw column —
+  // `updated_at < to_timestamp(ms / 1000.0)` — is lossy in a way that loses notes: the
+  // trigger sets updated_at from now(), which is fixed for a whole transaction, so
+  // every row in one push batch shares a timestamp, and whenever that timestamp's
+  // sub-millisecond part rounds DOWN the siblings all fail the comparison and vanish
+  // from the pull for good. Roughly half of all batches. Rounding both sides
+  // identically removes the mismatch entirely.
+  const cur = store.decodeCursor(cursor);
+  const liveParams = params.slice();
+  let keyset = '';
+  if (cur) {
+    liveParams.push(cur.ms, cur.nid);
+    const a = '$' + (liveParams.length - 1), b = '$' + liveParams.length;
+    // Row comparison against the same expression the cursor was built from, so the
+    // boundary is exclusive and a tie is broken the same way in both places.
+    keyset = `AND (${UPDATED_MS}, client_nid) < (${a}::bigint, ${b})`;
+  }
+
+  // Ordering on the expression means notes_user_recent_idx (user_id, updated_at DESC)
+  // no longer satisfies the sort, so Postgres sorts the user's live notes. Bounded by
+  // how many notes one account has and fine at the sizes this app holds. An expression
+  // index on (user_id, MS DESC, client_nid DESC) would remove the sort, but migrations/
+  // needs sign-off, so it is a follow-up rather than a silent addition here.
   const [live, dead, folders, prefs] = await Promise.all([
     db.query(
       `SELECT ${NOTE_COLS} FROM notes
-       WHERE user_id = $1 AND deleted_at IS NULL ${sinceClause}
-       ORDER BY updated_at DESC LIMIT ${PULL_LIMIT}`, params),
+       WHERE user_id = $1 AND deleted_at IS NULL ${sinceClause} ${keyset}
+       ORDER BY ${UPDATED_MS} DESC, client_nid DESC LIMIT ${PULL_LIMIT}`, liveParams),
     db.query(
       `SELECT ${NOTE_COLS} FROM notes
        WHERE user_id = $1 AND deleted_at > now() - interval '${TOMBSTONE_WINDOW}' ${sinceClause}
@@ -75,6 +115,14 @@ async function pull(userId, since) {
     db.query('SELECT prefs, sidebar_image FROM user_prefs WHERE user_id = $1', [userId]),
   ]);
 
+  // A full page means there may be more. One extra empty request when the total is an
+  // exact multiple of PULL_LIMIT is the price of not counting rows separately, and it
+  // is the safe direction to err: a client that stops early loses notes silently,
+  // which is the bug this pagination exists to remove.
+  const nextCursor = live.rows.length === PULL_LIMIT
+    ? store.encodeCursor(live.rows[live.rows.length - 1])
+    : null;
+
   return {
     notes:        live.rows.map(store.rowToNote),
     deletedNotes: dead.rows.map(store.rowToNote),
@@ -82,6 +130,7 @@ async function pull(userId, since) {
     prefs:        prefs.rowCount ? prefs.rows[0].prefs : null,
     sidebarImage: prefs.rowCount ? prefs.rows[0].sidebar_image : null,
     serverTime:   Date.now(),
+    nextCursor,
   };
 }
 
@@ -203,8 +252,11 @@ module.exports = async (req, res) => {
     if (req.method === 'GET') {
       const raw = req.query && req.query.since;
       const since = Number(raw);
+      // decodeCursor validates; anything unparseable is treated as absent, so a stale
+      // or mangled cursor restarts the pull rather than failing it.
+      const cursor = (req.query && typeof req.query.cursor === 'string') ? req.query.cursor : null;
       return res.status(200).json({
-        data: await pull(userId, Number.isFinite(since) && since > 0 ? since : null),
+        data: await pull(userId, Number.isFinite(since) && since > 0 ? since : null, cursor),
       });
     }
 
