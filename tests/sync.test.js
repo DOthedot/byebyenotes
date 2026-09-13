@@ -75,3 +75,41 @@ describe('SNAP_MAX', () => {
     expect(mergeRecents(many, []).length).toBeGreaterThanOrEqual(200);
   });
 });
+
+// ── A push must never carry more than the server will accept ─────────────────
+// api/notes-store.js slices anything past MAX_NOTES_PER_REQUEST off the end and
+// reports nothing, so a batch larger than that loses notes silently on the way out.
+// Asserted against the server's own constant rather than a copied literal.
+describe('PUSH_BATCH', () => {
+  const mod = require('../app.js');
+  const store = require('../api/notes-store.js');
+
+  test('never exceeds what one request can carry', () => {
+    expect(mod.PUSH_BATCH).toBeLessThanOrEqual(store.MAX_NOTES_PER_REQUEST);
+  });
+
+  test('chunk splits exactly at the batch size', () => {
+    const list = Array.from({ length: 450 }, (_, i) => i);
+    const parts = mod.chunk(list, mod.PUSH_BATCH);
+    expect(parts.map(p => p.length)).toEqual([200, 200, 50]);
+    expect(parts.flat()).toEqual(list);           // nothing dropped, order kept
+  });
+
+  test('a list at or under the limit is one batch, not a copy per item', () => {
+    expect(mod.chunk([1, 2, 3], 200)).toEqual([[1, 2, 3]]);
+    expect(mod.chunk(Array.from({ length: 200 }, (_, i) => i), 200)).toHaveLength(1);
+  });
+
+  test('an empty list still yields one batch, so deletions and prefs still send', () => {
+    // A push with no notes is not a no-op: it may carry tombstones or a prefs change.
+    expect(mod.chunk([], 200)).toEqual([[]]);
+  });
+
+  test('every chunk is within the server limit for a large vault', () => {
+    const list = Array.from({ length: 5000 }, (_, i) => i);
+    for (const part of mod.chunk(list, mod.PUSH_BATCH)) {
+      expect(part.length).toBeLessThanOrEqual(store.MAX_NOTES_PER_REQUEST);
+      expect(part.length).toBeGreaterThan(0);
+    }
+  });
+});
