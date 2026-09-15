@@ -22,30 +22,24 @@ const db    = require('./db');
 const store = require('./notes-store');
 const { resolveUser, AuthError } = require('./auth');
 
-// A pull is bounded so one enormous account cannot hold a connection open
-// indefinitely.
+// A PAGE SIZE, not a ceiling. pull() returns a nextCursor whenever a page comes back
+// full and the client walks every page, so an account with more rows than this no
+// longer loses the remainder in silence — which is what Import would have made routine.
 //
-// This is now exactly the client's SNAP_MAX, not comfortably above it — the client
-// was raised to 200 so an imported vault is not silently truncated locally. The two
-// being equal is deliberate: pushNow sends every snapshot in one request and
-// sanitizeNotes slices at MAX_NOTES_PER_REQUEST, so a client cap above this number
-// would lose notes on the way out with nothing to show for it.
-//
-// What that leaves, and it is not hypothetical: an account can already hold more live
-// rows than this returns. saveSnapshot evicts the oldest note locally once the list
-// passes SNAP_MAX and does NOT tombstone it — deleteSnapshot is the only path that
-// ever does — so every note a device has ever created was pushed before it aged out,
-// and push upserts without trimming. Any account that has created more notes over its
-// lifetime than the cap of the day already has rows no single pull returns.
-//
-// Raising the client cap 30 -> 200 made that better: more of those rows became
-// visible again. It did not fix it, so this is now a PAGE SIZE rather than a ceiling —
-// pull() returns a nextCursor whenever a page comes back full, and the client walks
-// every page. An account with more rows than this no longer loses the remainder
-// silently, which is what Import would otherwise have made routine.
-//
-// Still bounded per request, for the original reason: one enormous account must not
+// Still bounded per request for the original reason: one enormous account must not
 // hold a connection open while it streams everything it has.
+//
+// It is no longer tied to the client's SNAP_MAX, and deliberately so. That coupling
+// existed only while a push sent every snapshot in ONE request, where a client cap
+// above this number meant notes sliced away server-side with nothing to show for it.
+// Batching removed it: the client now holds far more than this (1000 at the time of
+// writing) and sends it in pieces this size.
+//
+// Worth keeping in view: an account accumulates rows that no device still has.
+// saveSnapshot evicts its oldest note without tombstoning it — deleteSnapshot is the
+// only path that ever does — so every note a device created is still a row here, and
+// push upserts without trimming. Paging is what makes those reachable again rather
+// than merely present.
 const PULL_LIMIT = 200;
 
 // Old tombstones are dropped from the pull: past this, every device has long

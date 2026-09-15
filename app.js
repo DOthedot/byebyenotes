@@ -109,28 +109,30 @@ const SYNC_KEY_LS    = 'bbn.syncKey';
 // because the server cannot tell "I still have this" from "I meant to make this".
 // Only deliberate acts go in here, and they are cleared once the server has them.
 const PENDING_KEY    = 'bbn.pending';
-// How many notes the store holds. Enforced on write (saveSnapshot) and on merge
-// (mergeRecents), so exceeding it drops the oldest silently — which is why the number
-// matters and why it is 200 rather than something rounder.
+// How many notes the store holds.
 //
-// 200 is the server's own MAX_NOTES_PER_REQUEST (api/notes-store.js). pushNow sends
-// every snapshot in ONE request and the server slices the rest away without saying so,
-// so a local cap above 200 would trade a visible local limit for invisible loss on the
-// server. Raising it further means paginating the push first.
+// Was 200, which was itself the server's MAX_NOTES_PER_REQUEST — a push sent every
+// snapshot in one request and the server sliced the rest away silently, so the client
+// could not safely hold more than one request could carry. That is no longer the
+// binding constraint: the pull pages, the push batches, and only changed notes
+// travel, so the transport no longer cares how many there are.
 //
-// Measured at 200 with realistic notes (~400 words plus a code block, 1.4KB stored
-// each): 277KB in localStorage against a ~5MB budget, 0.13ms to parse the whole list,
-// and a 677KB sync body against the 6MB cap in server.js — roughly 9x headroom.
+// What binds now is this browser. Measured at ~1.4KB for a realistic note (400 words
+// plus a code block) against a localStorage budget measured at 4.94MB:
 //
-// That 677KB is per PUSH, not per session, and it is the real cost of this number.
-// pushNow sends every note decompressed on every push, and schedulePush fires one
-// PUSH_DELAY (2s) after any edit — so a full store now ships ~6.7x what it did at 30
-// while you type. Within every limit, but not free, and worst on a phone.
+//     200 notes   0.27MB    5% of budget   0.20ms to parse the list
+//    1000 notes   1.33MB   27%             0.36ms
+//    2000 notes   2.66MB   54%             0.68ms
 //
-// Fixing that means sending only notes that changed, which is a protocol change
-// (per-note dirty tracking on both sides), not a tuning exercise. Worth doing before
-// anyone routinely carries a few hundred notes.
-const SNAP_MAX       = 200;
+// 1000 leaves roughly three quarters of the budget for everything else and for notes
+// bigger than typical, and keeps parsing — which loadSnapshots does constantly — well
+// under a millisecond.
+//
+// A count is a poor proxy for bytes, though: a thousand long notes is a different
+// amount of storage from a thousand short ones. writeSnapshots enforces the byte
+// ceiling separately by trimming and retrying on a quota error, so this number bounds
+// how many notes are kept and that bounds how much room they may take.
+const SNAP_MAX       = 1000;
 
 // Sidebar background presets. Generated CSS art, not photographs: byebyenotes has
 // no asset pipeline, and a gradient costs ~200 bytes where an image costs hosting.
@@ -647,13 +649,71 @@ function isOpenableSnapshot(s) {
   return !!(state && Array.isArray(state.blocks) && state.blocks.length > 0);
 }
 
+// Bytes, not notes, are the real ceiling — SNAP_MAX bounds the count, this bounds the
+// size. A thousand short notes and a thousand long ones are the same number and very
+// different amounts of storage, so the count alone cannot keep the list inside the
+// quota. On a quota failure the list is halved and retried until it fits, which drops
+// the oldest notes exactly as exceeding SNAP_MAX does.
+//
+// Distinguishing quota from any other storage failure matters: a quota error means
+// "too much", which trimming fixes, while a disabled-storage error means "none at
+// all", which retrying forever would not.
+function isQuotaError(e) {
+  return !!e && (e.name === 'QuotaExceededError' ||
+                 e.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||   // Firefox
+                 e.code === 22 || e.code === 1014);
+}
+
+function writeSnapshots(list) {
+  let keep = list.slice(0, SNAP_MAX);
+  for (;;) {
+    try {
+      localStorage.setItem(SNAP_KEY, JSON.stringify(keep));
+      return keep.length;
+    } catch (e) {
+      // Not a size problem, so a smaller list would not help either.
+      if (!isQuotaError(e) || keep.length <= 1) return -1;
+      keep = keep.slice(0, Math.max(1, Math.floor(keep.length / 2)));
+    }
+  }
+}
+
+// saveSnapshot runs on every autosave, so an ungated message would re-fire every
+// keystroke pause and turn a useful warning into noise you learn to ignore. Said once
+// per spell of trouble, and armed again by the next clean write.
+let storageWarned = false;
+
+function warnStorage(msg) {
+  if (storageWarned) return;
+  storageWarned = true;
+  flashCopied(msg);
+}
+
 function saveSnapshot(snap) {
   if (!isOpenableSnapshot(snap)) return;   // never persist a note that can't be reopened
-  try {
-    const list = loadSnapshots().filter(s => s.nid !== snap.nid);
-    list.unshift(snap);
-    localStorage.setItem(SNAP_KEY, JSON.stringify(list.slice(0, SNAP_MAX)));
-  } catch (e) { /* storage unavailable — feature quietly off */ }
+  const list = loadSnapshots().filter(s => s.nid !== snap.nid);
+  list.unshift(snap);
+  const kept = writeSnapshots(list);
+
+  // Said out loud. The note itself is safe either way — this app keeps the open note
+  // in the URL, which is the whole premise — but the recents list silently not
+  // updating looks exactly like the note having been saved, and the sidebar would
+  // quietly stop showing work that is really there.
+  //
+  // Compared against what SNAP_MAX would have allowed, not against the list handed in.
+  // Those differ every time the store is at its cap, which is the normal state for a
+  // large vault — testing `list.length` instead meant the warning went quiet exactly
+  // when quota trouble became likely.
+  const allowed = Math.min(list.length, SNAP_MAX);
+  if (kept === -1) {
+    warnStorage('this browser’s storage is full — the note is still in its URL');
+  } else if (kept < allowed) {
+    warnStorage(`storage full — keeping the newest ${kept} notes on this device`);
+  } else {
+    // A clean write. Arm the warning again so a later problem is not swallowed by the
+    // fact that an earlier one was already mentioned.
+    storageWarned = false;
+  }
   schedulePush();
 }
 
@@ -1122,7 +1182,18 @@ async function syncPull() {
   // Remote entries bypass saveSnapshot's openability guard, so a legacy/dead entry can
   // still land here — the click-time guard in makeRecentRow catches those regardless.
   const merged = mergeRecents(loadSnapshots(), remote).filter(s => !gone.has(s.nid));
-  try { localStorage.setItem(SNAP_KEY, JSON.stringify(merged)); } catch (e) {}
+  // Through the same writer autosave uses. A pull merges remote notes in, so it grows
+  // the list exactly as a save does and can hit the same wall — and at this cap that
+  // is no longer remote. Writing it raw here would have left one of the two paths that
+  // enlarge the store still failing in silence.
+  const keptAfterPull = writeSnapshots(merged);
+  if (keptAfterPull === -1) {
+    warnStorage('this browser’s storage is full — some synced notes were not saved here');
+  } else if (keptAfterPull < Math.min(merged.length, SNAP_MAX)) {
+    warnStorage(`storage full — keeping the newest ${keptAfterPull} notes on this device`);
+  } else {
+    storageWarned = false;
+  }
 
   // A note open in a tab that was deleted on another device would otherwise keep
   // its tab, pointing at a snapshot that no longer exists.
@@ -1252,8 +1323,8 @@ let didFullPush = false;
 // Notes go up in batches. The server slices anything past MAX_NOTES_PER_REQUEST off
 // the end of a push and says nothing about it, so a single request carrying more than
 // that loses the remainder silently — the same failure the paged pull just removed on
-// the way down. SNAP_MAX equals that limit today, so this never splits in practice;
-// it exists so raising the cap is a one-line change rather than a data-loss bug.
+// the way down. SNAP_MAX is now well above this limit, so a full store splits
+// routinely rather than hypothetically — this is live, not scaffolding.
 //
 // Kept in step with the server by a test rather than by hope — see tests/sync.test.js.
 const PUSH_BATCH = 200;
@@ -4924,7 +4995,7 @@ if (typeof module !== 'undefined') {
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
     normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS, SIDEBAR_STEPS,
     normalizeSurfaceBg, SURFACE_BG_DEFAULTS, customFingerprint, wallpapersFor, buildSyncPrefs,
-    PUSH_BATCH, chunk, cheapHash, noteFingerprint,
+    PUSH_BATCH, chunk, cheapHash, noteFingerprint, isQuotaError,
     normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
     snapshotToWireNote, wireNoteToSnapshot, blocksToMarkdown, safeFileName, safePathSegments, buildExportTree, loadScriptOnce, __resetScriptCache,

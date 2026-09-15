@@ -51,7 +51,7 @@ browser globals to fake, and running it under jsdom would only hide that fact.
 | `stripFormatting` | `markdown.test.js` | Remove one format category's markers from a region. |
 | `mergeRecents` | `sync.test.js` | Merge local + remote recent-note snapshots. |
 | `groupByFolder` | `sync.test.js` | Split snapshots into loose notes + sorted folders. |
-| `SNAP_MAX` (via `mergeRecents`) | `sync.test.js` | Pins the note-store ceiling to the server's `MAX_NOTES_PER_REQUEST`. pushNow sends every snapshot in one request and the server slices the rest away silently, so the two constants must not drift apart. |
+| the store and the wire | `sync.test.js` | The store may hold more notes than one sync request carries, but every batch leaving it must fit inside one. Replaces an older assertion that tied `SNAP_MAX` to `MAX_NOTES_PER_REQUEST` — batching removed that tie deliberately. |
 | `nextNavIndex` | `home-nav.test.js` | Next Home-screen selection index for Arrow keys (wrap; `-1` = none). |
 | `buildCommandList` | `help.test.js` | The ⌘K command list — asserted against as the source of the help COMMANDS section. |
 | `buildHelpList` | `help.test.js` | Read-only `/help` reference: intro + COMMANDS (from `buildCommandList`) + SHORTCUTS + FORMATTING. |
@@ -177,7 +177,7 @@ helper building snapshots `{ nid, t, title, folder, blockCount, langs }` (`t` = 
 | Test | Asserts | Why |
 |------|---------|-----|
 | `mergeRecents keeps newest entry per note id` | For the same `nid`, the higher-`t` entry wins (title becomes `a-newer`); result ordered newest-first → `['a','c','b']`. | Two devices editing the same note must converge on the latest, not duplicate it. |
-| `mergeRecents sorts newest-first and caps the list` | 400 inputs → capped, newest first, and the survivors are the newest `t` values rather than an arbitrary slice. Asserts no literal cap, so moving `SNAP_MAX` doesn't rot the test. | The recents list is bounded, and capping must drop the OLDEST. |
+| `mergeRecents sorts newest-first and caps the list` | 2000 inputs → capped, newest first, and the survivors are the newest `t` values rather than an arbitrary slice. Asserts no literal cap, so moving `SNAP_MAX` doesn't rot the test. | The recents list is bounded, and capping must drop the OLDEST. |
 | `groupByFolder splits loose notes from sorted folders` | Foldered notes group under **alphabetically sorted** folder names (`['ideas','work']`); within a folder, notes keep newest-first order; un-foldered notes go to `loose`. | Drives the collapsible-folder start screen. |
 | `groupByFolder treats blank folder as loose` | A folder of `'  '` (whitespace) counts as no folder → both notes land in `loose`, `folders` empty. | Prevents phantom blank folders. |
 | `mergeRecents tolerates null/invalid input` | `mergeRecents(null, undefined) → []`; `[null, {}, snap('a',1)]` filters junk → `['a']`. | Corrupt localStorage / API payloads must never crash the start screen. |

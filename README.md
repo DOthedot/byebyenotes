@@ -19,7 +19,7 @@ Your blocks, font, and theme are compressed with [LZ-String](https://github.com/
 - **Tabs** — notes you open stack up as numbered tabs above the editor; `Ctrl+1`–`9` jumps between them, `×` closes. Only the active tab's note lives in the URL, so sharing is unchanged
 - **Line numbers** — a vim-style gutter numbering continuously across every block
 - **Sidebar backgrounds** — `/settings` opens a floating window with wallpaper swatches and drag bars for opacity, blur, brightness, saturation, text scrim and position. Filters sit on their own layer, so file names stay sharp at any blur
-- **Recent notes** — your last 30 notes are kept in localStorage and listed on the start screen; the URL also auto-syncs as you type, so refreshing never loses work
+- **Recent notes** — your recent notes are kept in localStorage and listed on the start screen, trimmed to fit the browser's storage rather than to a fixed count; the URL also auto-syncs as you type, so refreshing never loses work
 - **Folders** — hover a recent note and hit ▦ to file it into a folder (pick one or type a new name); folders are collapsible and sync across devices
 - **Cross-device sync (opt-in)** — `/sync` + a passphrase syncs your notes, folders and theme/font across devices, stored in Postgres. The passphrase never leaves the browser (only its SHA-256 hash is sent). Deletes propagate properly — a note removed on one device stays removed. Signed out, the app stays 100% serverless
 - **Remembered preferences** — your chosen theme and font apply to every fresh note (localStorage)
