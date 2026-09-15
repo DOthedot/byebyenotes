@@ -113,3 +113,58 @@ describe('PUSH_BATCH', () => {
     }
   });
 });
+
+// ── The push fingerprint ─────────────────────────────────────────────────────
+// Dirtiness is derived by comparing a note's current fingerprint against the one the
+// server last accepted, rather than kept as a flag. The fingerprint must therefore
+// cover EVERY field that travels — a field it misses is a change that stops syncing.
+describe('noteFingerprint', () => {
+  const mod = require('../app.js');
+  const wire = (over = {}) => ({
+    nid: 'n1', blocks: [{ type: 'text', lang: null, content: 'hello' }],
+    title: 'a note', titlePinned: true, folder: 'work', theme: null, font: null, ...over,
+  });
+
+  test('identical notes fingerprint the same', () => {
+    expect(mod.noteFingerprint(wire())).toBe(mod.noteFingerprint(wire()));
+  });
+
+  test('a content edit changes it', () => {
+    expect(mod.noteFingerprint(wire({ blocks: [{ type: 'text', lang: null, content: 'bye' }] })))
+      .not.toBe(mod.noteFingerprint(wire()));
+  });
+
+  test('a RENAME changes it — the case a content hash would miss', () => {
+    // title/folder/titlePinned live on the snapshot, not inside snap.hash, so
+    // fingerprinting the hash alone would make renames and moves stop syncing.
+    expect(mod.noteFingerprint(wire({ title: 'renamed' }))).not.toBe(mod.noteFingerprint(wire()));
+  });
+
+  test('a MOVE between folders changes it', () => {
+    expect(mod.noteFingerprint(wire({ folder: 'personal' }))).not.toBe(mod.noteFingerprint(wire()));
+    expect(mod.noteFingerprint(wire({ folder: null }))).not.toBe(mod.noteFingerprint(wire()));
+  });
+
+  test('pinning the title changes it', () => {
+    expect(mod.noteFingerprint(wire({ titlePinned: false }))).not.toBe(mod.noteFingerprint(wire()));
+  });
+
+  test('theme and font changes are covered', () => {
+    expect(mod.noteFingerprint(wire({ theme: 'nord' }))).not.toBe(mod.noteFingerprint(wire()));
+    expect(mod.noteFingerprint(wire({ font: 'fira-code' }))).not.toBe(mod.noteFingerprint(wire()));
+  });
+
+  test('two different notes do not collide on a short string', () => {
+    expect(mod.noteFingerprint(wire({ nid: 'n1' }))).not.toBe(mod.noteFingerprint(wire({ nid: 'n2' })));
+  });
+
+  test('a missing note fingerprints to empty rather than throwing', () => {
+    expect(mod.noteFingerprint(null)).toBe('');
+  });
+
+  test('block ORDER matters — reordering is a real change', () => {
+    const a = wire({ blocks: [{ type: 'text', content: 'one' }, { type: 'text', content: 'two' }] });
+    const b = wire({ blocks: [{ type: 'text', content: 'two' }, { type: 'text', content: 'one' }] });
+    expect(mod.noteFingerprint(a)).not.toBe(mod.noteFingerprint(b));
+  });
+});

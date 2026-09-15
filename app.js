@@ -214,15 +214,27 @@ const SURFACE_BG_DEFAULTS = {
 // (it has no column), but this does — and it is what lets a pulling device tell "this
 // custom background is the one I have" from "this is a different device's picture".
 // Not a security hash: it only has to make an accidental collision implausible.
-function customFingerprint(dataUri) {
-  const str = String(dataUri || '');
-  if (!str) return '';
+function cheapHash(str) {
+  const t = String(str || '');
+  if (!t) return '';
   let h1 = 0x811c9dc5, h2 = 0x01000193;
-  for (let i = 0; i < str.length; i++) {
-    h1 = Math.imul(h1 ^ str.charCodeAt(i), 0x01000193);
-    h2 = Math.imul(h2 + str.charCodeAt(i), 0x85ebca6b) ^ (h2 >>> 13);
+  for (let i = 0; i < t.length; i++) {
+    h1 = Math.imul(h1 ^ t.charCodeAt(i), 0x01000193);
+    h2 = Math.imul(h2 + t.charCodeAt(i), 0x85ebca6b) ^ (h2 >>> 13);
   }
-  return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36) + '.' + str.length.toString(36);
+  return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36) + '.' + t.length.toString(36);
+}
+
+function customFingerprint(dataUri) {
+  return cheapHash(dataUri);
+}
+
+// Fingerprints exactly what goes on the wire, which is NOT the same as the note's
+// content hash: title, folder and titlePinned live on the snapshot rather than inside
+// snap.hash, so a rename or a move changes what the server must be told while leaving
+// the hash untouched. Fingerprinting the hash alone would make renames stop syncing.
+function noteFingerprint(wireNote) {
+  return wireNote ? cheapHash(JSON.stringify(wireNote)) : '';
 }
 
 // Shapes `bbn.prefs` into what a sync push may carry, and hands back the sidebar
@@ -1207,6 +1219,36 @@ async function syncPull() {
   return { truncated: !!data.truncated };
 }
 
+// What the server last accepted, per note: nid -> fingerprint of the exact wire note
+// that came back 200. A note is dirty when its current fingerprint differs, which
+// needs no flag maintained at every edit site and cannot drift out of step with the
+// content the way a boolean can.
+//
+// Written ONLY after a batch succeeds. A failed or never-dispatched batch leaves the
+// old entry in place, so the note stays dirty and goes again — the property the
+// batching comment below depends on.
+const SYNCED_KEY = 'bbn.synced';
+
+function loadSynced() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SYNCED_KEY));
+    return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+  } catch (e) { return {}; }
+}
+
+function saveSynced(map) {
+  try { localStorage.setItem(SYNCED_KEY, JSON.stringify(map)); } catch (e) {}
+}
+
+// Once per page load the push ignores fingerprints and sends everything.
+//
+// The fingerprint store is a claim about the SERVER's state that only this device
+// ever updates. If the server loses a row, or the store is restored from a stale
+// backup, nothing would ever re-send the notes it wrongly believes are safe, and the
+// divergence would be permanent and silent. A full push per session bounds that to
+// one session, and costs one push of the size every push used to be.
+let didFullPush = false;
+
 // Notes go up in batches. The server slices anything past MAX_NOTES_PER_REQUEST off
 // the end of a push and says nothing about it, so a single request carrying more than
 // that loses the remainder silently — the same failure the paged pull just removed on
@@ -1229,7 +1271,14 @@ async function pushNow() {
 
   const pending = loadPending();
   const { prefs, sidebarImage } = buildSyncPrefs(loadPrefs(), sidebarImageDirty);
-  const notes = loadSnapshots().map(snapshotToWireNote).filter(Boolean);
+  const allNotes = loadSnapshots().map(snapshotToWireNote).filter(Boolean);
+  const syncedAtStart = loadSynced();
+  const prints = new Map(allNotes.map(n => [n.nid, noteFingerprint(n)]));
+  // Send everything on the session's first push (see didFullPush), only what changed
+  // after that.
+  const notes = didFullPush
+    ? allNotes.filter(n => syncedAtStart[n.nid] !== prints.get(n.nid))
+    : allNotes;
 
   // Everything that is not a note rides on the FIRST batch only. Repeating deletions
   // and prefs on every batch would re-apply them needlessly, and prefs carries a `t`
@@ -1289,6 +1338,20 @@ async function pushNow() {
           ? 'sync failed — that passphrase belongs to a different account'
           : `sync failed (${res.status})`);
       }
+      // This batch is durable, so record what it contained — keyed to the fingerprint
+      // computed when the request was BUILT, never to the note's state now. A note
+      // edited while its own request was in flight has a different fingerprint by the
+      // time this runs, so it stays dirty and goes again rather than being written off
+      // as sent.
+      // Re-read, merge, write. Two pushes can overlap now that this function awaits,
+      // and a run holding a copy of the store from its own start would write back a
+      // snapshot missing whatever the other run recorded in between. That fails safe
+      // — a lost entry means a note is re-sent, never wrongly called clean — but it is
+      // avoidable outright: there is no await between this read and its write, so on a
+      // single-threaded runtime the pair cannot be interleaved.
+      const latest = loadSynced();
+      batches[i].forEach(n => { latest[n.nid] = prints.get(n.nid); });
+      saveSynced(latest);
     }
   } catch (e) {
     return fail('sync failed — server unreachable');
@@ -1302,6 +1365,17 @@ async function pushNow() {
     deletedFolders: first.deletedFolders,
     newFolders:     first.folders,
   });
+  didFullPush = true;
+
+  // Drop entries for notes this device no longer has, so the store cannot grow
+  // without bound as notes come and go.
+  const live = new Set(allNotes.map(n => n.nid));
+  const current = loadSynced();
+  let pruned = false;
+  for (const nid of Object.keys(current)) {
+    if (!live.has(nid)) { delete current[nid]; pruned = true; }
+  }
+  if (pruned) saveSynced(current);
 }
 
 function schedulePush() {
@@ -1342,6 +1416,11 @@ function disableSync() {
   syncKey = null;
   clearTimeout(pushTimer);
   try { localStorage.removeItem(SYNC_KEY_LS); } catch (e) {}
+  // The fingerprint store describes what ONE account's server has. Re-enabling with a
+  // different passphrase is a different account that has seen none of these notes, so
+  // keeping the store would mark every one of them as already synced and push nothing.
+  try { localStorage.removeItem(SYNCED_KEY); } catch (e) {}
+  didFullPush = false;
   flashCopied('sync off — this device keeps its local copy');
 }
 
@@ -4845,7 +4924,7 @@ if (typeof module !== 'undefined') {
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
     normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS, SIDEBAR_STEPS,
     normalizeSurfaceBg, SURFACE_BG_DEFAULTS, customFingerprint, wallpapersFor, buildSyncPrefs,
-    PUSH_BATCH, chunk,
+    PUSH_BATCH, chunk, cheapHash, noteFingerprint,
     normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
     snapshotToWireNote, wireNoteToSnapshot, blocksToMarkdown, safeFileName, safePathSegments, buildExportTree, loadScriptOnce, __resetScriptCache,
