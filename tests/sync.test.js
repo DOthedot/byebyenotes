@@ -19,14 +19,15 @@ test('mergeRecents sorts newest-first and caps the list', () => {
   // Deliberately not asserting a literal cap. This test hardcoded 30 and had to be
   // edited when the ceiling moved; what actually matters is that the list IS capped
   // and that the survivors are the newest, whatever the number happens to be.
-  const many = Array.from({ length: 400 }, (_, i) => snap(`n${i}`, i));
+  const N = 2000;                       // comfortably above any plausible cap
+  const many = Array.from({ length: N }, (_, i) => snap(`n${i}`, i));
   const merged = mergeRecents(many, []);
-  expect(merged.length).toBeLessThan(400);
-  expect(merged[0].nid).toBe('n399');
+  expect(merged.length).toBeLessThan(N);
+  expect(merged[0].nid).toBe(`n${N - 1}`);
   // Capping must drop the OLDEST, never an arbitrary slice.
   const kept = merged.map(s => s.t);
   expect(kept).toEqual([...kept].sort((a, b) => b - a));
-  expect(Math.min(...kept)).toBe(400 - merged.length);
+  expect(Math.min(...kept)).toBe(N - merged.length);
 });
 
 test('groupByFolder splits loose notes from sorted folders', () => {
@@ -50,29 +51,45 @@ test('mergeRecents tolerates null/invalid input', () => {
   expect(mergeRecents([null, {}, snap('a', 1)], null).map(s => s.nid)).toEqual(['a']);
 });
 
-// ── The note store's ceiling is tied to the server's, not chosen freely ───────
-// pushNow sends every snapshot in one request and api/notes-store.js slices anything
-// past MAX_NOTES_PER_REQUEST away without reporting it. A local cap above that number
-// would swap a visible local limit for silent loss on the server, so the two must not
-// drift apart.
-describe('SNAP_MAX', () => {
+// ── The store may outgrow one request; every batch leaving it may not ────────
+// This used to say the store's ceiling was tied to the server's, because a push sent
+// every snapshot in one request and api/notes-store.js sliced the rest away silently.
+// Batching broke that tie deliberately. What has to hold now is narrower and is what
+// actually protects the data: the store can hold more than one request carries, but
+// nothing larger than one request ever leaves it.
+describe('the note store and the wire', () => {
   const store = require('../api/notes-store.js');
+  const mod = require('../app.js');
 
-  test('never exceeds what one sync request can carry', () => {
-    const many = Array.from({ length: 400 }, (_, i) => ({
-      nid: 'n' + i, title: 't' + i, t: i,
-      hash: btoa(JSON.stringify({ blocks: [{ type: 'text', content: 'x' }] })),
-    }));
-    const kept = mergeRecents(many, []).length;
-    expect(kept).toBeLessThanOrEqual(store.MAX_NOTES_PER_REQUEST);
+  const many = (n) => Array.from({ length: n }, (_, i) => ({
+    nid: 'n' + i, title: 't' + i, t: i,
+    hash: btoa(JSON.stringify({ blocks: [{ type: 'text', content: 'x' }] })),
+  }));
+
+  // This deliberately no longer asserts SNAP_MAX <= MAX_NOTES_PER_REQUEST. That held
+  // only while a push sent every note in ONE request, and it is exactly the limit
+  // batching removed — the store may now hold more than a single request can carry,
+  // because no single request has to carry it.
+  test('the store holds more than one request can carry', () => {
+    expect(mergeRecents(many(2000), []).length).toBeGreaterThan(store.MAX_NOTES_PER_REQUEST);
   });
 
-  test('holds more than a trivial handful, so a real vault fits', () => {
-    const many = Array.from({ length: 400 }, (_, i) => ({
-      nid: 'n' + i, title: 't' + i, t: i,
-      hash: btoa(JSON.stringify({ blocks: [{ type: 'text', content: 'x' }] })),
-    }));
-    expect(mergeRecents(many, []).length).toBeGreaterThanOrEqual(200);
+  // What must hold instead: however full the store gets, every batch leaving it fits
+  // inside one request. This is the assertion that keeps notes from being sliced away
+  // server-side, and it is the reason the cap above is allowed to be larger.
+  test('a full store still splits into batches the server accepts whole', () => {
+    const full = mergeRecents(many(5000), []);
+    const batches = mod.chunk(full, mod.PUSH_BATCH);
+    expect(batches.length).toBeGreaterThan(1);
+    for (const b of batches) {
+      expect(b.length).toBeGreaterThan(0);
+      expect(b.length).toBeLessThanOrEqual(store.MAX_NOTES_PER_REQUEST);
+    }
+    expect(batches.reduce((n, b) => n + b.length, 0)).toBe(full.length);
+  });
+
+  test('holds enough for a real vault, not a handful', () => {
+    expect(mergeRecents(many(5000), []).length).toBeGreaterThanOrEqual(1000);
   });
 });
 
@@ -166,5 +183,36 @@ describe('noteFingerprint', () => {
     const a = wire({ blocks: [{ type: 'text', content: 'one' }, { type: 'text', content: 'two' }] });
     const b = wire({ blocks: [{ type: 'text', content: 'two' }, { type: 'text', content: 'one' }] });
     expect(mod.noteFingerprint(a)).not.toBe(mod.noteFingerprint(b));
+  });
+});
+
+// ── Telling a quota error from an unusable store ─────────────────────────────
+// Only the first is fixable by trimming. Treating a disabled-storage error as a size
+// problem would retry a write that can never succeed; treating a quota error as fatal
+// would throw away a list that would have fit at half the size.
+describe('isQuotaError', () => {
+  const mod = require('../app.js');
+  const err = (over) => Object.assign(new Error('x'), over);
+
+  test('recognises the standard quota error', () => {
+    expect(mod.isQuotaError(err({ name: 'QuotaExceededError' }))).toBe(true);
+  });
+
+  test('recognises the Firefox spelling and the legacy codes', () => {
+    expect(mod.isQuotaError(err({ name: 'NS_ERROR_DOM_QUOTA_REACHED' }))).toBe(true);
+    expect(mod.isQuotaError(err({ code: 22 }))).toBe(true);
+    expect(mod.isQuotaError(err({ code: 1014 }))).toBe(true);
+  });
+
+  test('does NOT treat a disabled store as a size problem', () => {
+    // Safari private browsing throws SecurityError; retrying smaller never helps.
+    expect(mod.isQuotaError(err({ name: 'SecurityError' }))).toBe(false);
+    expect(mod.isQuotaError(err({ name: 'TypeError' }))).toBe(false);
+  });
+
+  test('survives junk without throwing', () => {
+    for (const bad of [null, undefined, 0, '', {}, 'QuotaExceededError']) {
+      expect(mod.isQuotaError(bad)).toBe(false);
+    }
   });
 });

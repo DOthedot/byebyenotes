@@ -76,7 +76,7 @@ field optional. Returns `{ ok: true, ...counts }`.
 |---|---|
 | Upserts are **no-ops when nothing changed** | Otherwise every 2s push bumps `updated_at` on every note and `?since=` returns everything, forever. |
 | A tombstoned note is **never resurrected** by an upsert | A device that hasn't pulled yet still holds the note and will push it back. Making deletes stick is the entire point. |
-| Absence of `notes` ≠ deletion | The client only ever sends its most recent `SNAP_MAX` notes (200); delete-by-absence would wipe everything past that. |
+| Absence of `notes` ≠ deletion | A push carries only the notes that changed, in batches — never the client's whole store — so absence means "unchanged" far more often than "deleted". Delete-by-absence would wipe almost everything. |
 | `notes` is full state; `folders` is **intentions only** | The notes upsert refuses tombstoned rows, so re-sending every note is harmless. The folders upsert deliberately *un*-deletes (so re-creating a deleted path works), which means the client must send only folders the user just created — sending its whole list would revive folders another device had deleted. `app.js` tracks these in `bbn.pending`. |
 | `sidebarImage` **omitted** = leave it; **`null`** = clear it | The client doesn't carry the 120KB image in a normal push, so "omitted means clear" would wipe the wallpaper on every autosave. |
 | `prefs` is refused if its `t` is older than the stored one | Stops a laggy device replaying an old blob over a newer one. |
