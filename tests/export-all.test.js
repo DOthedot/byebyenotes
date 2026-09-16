@@ -373,3 +373,301 @@ describe('export path length', () => {
     expect(name.endsWith('.md')).toBe(true);
   });
 });
+
+// ── markdownToBlocks ─────────────────────────────────────────────────────────
+// The inverse of blocksToMarkdown. Blocks are only ever 'text' or 'code', which is
+// what makes the round trip lossless — and what makes fenced regions the only
+// structure this has to recognise.
+describe('markdownToBlocks', () => {
+  test('plain prose is one text block', () => {
+    expect(mod.markdownToBlocks('hello world'))
+      .toEqual([{ type: 'text', lang: null, content: 'hello world' }]);
+  });
+
+  test('a fenced block becomes a code block carrying its language', () => {
+    expect(mod.markdownToBlocks('```python\nx = 1\n```'))
+      .toEqual([{ type: 'code', lang: 'python', content: 'x = 1' }]);
+  });
+
+  test('a fence with no language is still code', () => {
+    expect(mod.markdownToBlocks('```\nx = 1\n```'))
+      .toEqual([{ type: 'code', lang: null, content: 'x = 1' }]);
+  });
+
+  test('prose and code interleave in order', () => {
+    expect(mod.markdownToBlocks('intro\n\n```js\nconst a = 1;\n```\n\noutro')).toEqual([
+      { type: 'text', lang: null, content: 'intro' },
+      { type: 'code', lang: 'js',  content: 'const a = 1;' },
+      { type: 'text', lang: null, content: 'outro' },
+    ]);
+  });
+
+  test('blank lines INSIDE prose are kept — paragraphs are not separate notes', () => {
+    // Splitting prose on blank lines would shatter one note into many blocks and
+    // lose the distinction between a paragraph break and a block boundary.
+    expect(mod.markdownToBlocks('one\n\ntwo\n\nthree'))
+      .toEqual([{ type: 'text', lang: null, content: 'one\n\ntwo\n\nthree' }]);
+  });
+
+  test('an unterminated fence runs to the end rather than throwing', () => {
+    expect(mod.markdownToBlocks('text\n\n```js\nconst a = 1;')).toEqual([
+      { type: 'text', lang: null, content: 'text' },
+      { type: 'code', lang: 'js',  content: 'const a = 1;' },
+    ]);
+  });
+
+  test('an empty code block survives', () => {
+    expect(mod.markdownToBlocks('```js\n```'))
+      .toEqual([{ type: 'code', lang: 'js', content: '' }]);
+  });
+
+  test('a language with punctuation is kept, junk is not', () => {
+    expect(mod.markdownToBlocks('```c++\nx\n```')[0].lang).toBe('c++');
+    // The lang becomes a highlight.js class name, so it cannot be arbitrary text.
+    expect(mod.markdownToBlocks('```<script>\nx\n```')[0].lang).toBe(null);
+  });
+
+  test('empty input yields one empty text block, never zero blocks', () => {
+    // A note with no blocks cannot be opened — isOpenableSnapshot rejects it.
+    expect(mod.markdownToBlocks('')).toEqual([{ type: 'text', lang: null, content: '' }]);
+    expect(mod.markdownToBlocks(null)).toEqual([{ type: 'text', lang: null, content: '' }]);
+  });
+
+  test('CRLF line endings are normalised', () => {
+    // A vault written on Windows, or unzipped there, arrives with \r\n.
+    expect(mod.markdownToBlocks('a\r\nb')).toEqual([{ type: 'text', lang: null, content: 'a\nb' }]);
+    expect(mod.markdownToBlocks('```js\r\nx = 1\r\n```')[0].content).toBe('x = 1');
+  });
+
+  test('round trip: blocks -> markdown -> blocks is identity', () => {
+    const cases = [
+      [{ type: 'text', lang: null, content: 'just prose' }],
+      [{ type: 'code', lang: 'js', content: 'const a = 1;' }],
+      [{ type: 'text', lang: null, content: 'a\n\nb' }, { type: 'code', lang: 'py', content: 'x = 1' }],
+      [{ type: 'code', lang: 'js', content: 'a' }, { type: 'code', lang: 'py', content: 'b' }],
+      [{ type: 'text', lang: null, content: 'before' },
+       { type: 'code', lang: null, content: 'mid' },
+       { type: 'text', lang: null, content: 'after' }],
+    ];
+    for (const blocks of cases) {
+      expect(mod.markdownToBlocks(mod.blocksToMarkdown(blocks))).toEqual(blocks);
+    }
+  });
+
+  test('ADJACENT TEXT BLOCKS MERGE, and that is the format, not a bug', () => {
+    // blocksToMarkdown joins blocks with a blank line, so two text blocks serialise to
+    // exactly what ONE block containing a blank line serialises to. Nothing in the
+    // markdown distinguishes them, so importing merges. Only a fence is a real
+    // boundary. Pinned deliberately: the alternative is inventing a separator that
+    // would make the exported files stop being ordinary markdown.
+    const two = [{ type: 'text', lang: null, content: 'one' },
+                 { type: 'text', lang: null, content: 'two' }];
+    expect(mod.markdownToBlocks(mod.blocksToMarkdown(two)))
+      .toEqual([{ type: 'text', lang: null, content: 'one\n\ntwo' }]);
+    // And the merged form is stable — importing it again changes nothing further.
+    const once = mod.markdownToBlocks(mod.blocksToMarkdown(two));
+    expect(mod.markdownToBlocks(mod.blocksToMarkdown(once))).toEqual(once);
+  });
+});
+
+// ── parseImportFiles ─────────────────────────────────────────────────────────
+// Turns a flat [{path, text}] list — from a folder picker or a zip — into notes to
+// create. Additive only: every note gets a fresh nid, so an import can never
+// overwrite or delete anything that is already here.
+describe('parseImportFiles', () => {
+  const f = (path, text = 'body') => ({ path, text });
+
+  test('a markdown file becomes a note titled by its filename', () => {
+    const { notes } = mod.parseImportFiles([f('standup.md')], null);
+    expect(notes).toHaveLength(1);
+    expect(notes[0].title).toBe('standup');
+    expect(notes[0].folder).toBe(null);
+    expect(notes[0].blocks).toEqual([{ type: 'text', lang: null, content: 'body' }]);
+  });
+
+  test('directories become folders', () => {
+    const { notes, folders } = mod.parseImportFiles([f('work/api/auth.md')], null);
+    expect(notes[0].folder).toBe('work/api');
+    expect(folders).toContain('work/api');
+  });
+
+  test('a shared root directory is stripped, so our own zip does not nest', () => {
+    const { notes, folders } = mod.parseImportFiles([
+      f('byebyenotes-2026-09-16/standup.md'),
+      f('byebyenotes-2026-09-16/work/retro.md'),
+    ], null);
+    expect(notes.map(n => n.folder)).toEqual([null, 'work']);
+    expect(folders).toEqual(['work']);
+  });
+
+  test('a root is only stripped when EVERY file shares it', () => {
+    const { notes } = mod.parseImportFiles([f('work/a.md'), f('personal/b.md')], null);
+    expect(notes.map(n => n.folder).sort()).toEqual(['personal', 'work']);
+  });
+
+  test('non-markdown files are skipped and counted', () => {
+    const { notes, skipped } = mod.parseImportFiles([
+      f('a.md'), f('img.png'), f('.obsidian/config.json'), f('.DS_Store'), f('notes.txt'),
+    ], null);
+    expect(notes).toHaveLength(1);
+    expect(skipped).toBe(4);
+  });
+
+  test('the manifest supplies the real title, theme and font', () => {
+    const manifest = { version: 1, notes: [
+      { path: 'work/ab.md', title: 'a/b', theme: 'nord', font: 'fira-code' } ] };
+    const { notes } = mod.parseImportFiles([f('work/ab.md')], manifest);
+    expect(notes[0].title).toBe('a/b');       // the title the filename could not hold
+    expect(notes[0].theme).toBe('nord');
+    expect(notes[0].font).toBe('fira-code');
+  });
+
+  test('a STALE manifest costs metadata, never notes', () => {
+    // Reorganising the vault in Obsidian moves files; the manifest keys on path.
+    const manifest = { version: 1, notes: [{ path: 'old/place.md', title: 'fancy title' }] };
+    const { notes } = mod.parseImportFiles([f('new/place.md')], manifest);
+    expect(notes).toHaveLength(1);
+    expect(notes[0].title).toBe('place');     // fell back to the filename
+    expect(notes[0].folder).toBe('new');
+  });
+
+  test('a corrupt manifest is ignored rather than fatal', () => {
+    for (const bad of [null, undefined, 'nonsense', 42, {}, { notes: 'no' }]) {
+      expect(mod.parseImportFiles([f('a.md')], bad).notes).toHaveLength(1);
+    }
+  });
+
+  test('every imported note gets a FRESH nid — import never overwrites', () => {
+    const manifest = { version: 1, notes: [{ path: 'a.md', nid: 'existing-nid' }] };
+    const { notes } = mod.parseImportFiles([f('a.md')], manifest);
+    expect(notes[0].nid).toBeTruthy();
+    expect(notes[0].nid).not.toBe('existing-nid');
+  });
+
+  test('two imported files never share an nid', () => {
+    const { notes } = mod.parseImportFiles(
+      Array.from({ length: 50 }, (_, i) => f(`n${i}.md`)), null);
+    expect(new Set(notes.map(n => n.nid)).size).toBe(50);
+  });
+
+  test('a traversing path cannot escape into a parent folder', () => {
+    // The paths come from a zip a stranger could have made.
+    const { notes } = mod.parseImportFiles([f('../../etc/passwd.md')], null);
+    expect(notes[0].folder).not.toMatch(/\.\./);
+    expect((notes[0].folder || '').startsWith('/')).toBe(false);
+  });
+
+  test('fenced code in a file survives the import', () => {
+    const { notes } = mod.parseImportFiles([f('a.md', '```js\nconst a = 1;\n```')], null);
+    expect(notes[0].blocks).toEqual([{ type: 'code', lang: 'js', content: 'const a = 1;' }]);
+  });
+
+  test('an empty file imports as an openable note, not as nothing', () => {
+    const { notes } = mod.parseImportFiles([f('empty.md', '')], null);
+    expect(notes[0].blocks.length).toBeGreaterThan(0);
+  });
+
+  test('nothing to import is an empty result, not a crash', () => {
+    expect(mod.parseImportFiles([], null)).toEqual({ notes: [], folders: [], skipped: 0 });
+    expect(mod.parseImportFiles(null, null).notes).toEqual([]);
+  });
+
+  test('folders are deduped and include every ancestor', () => {
+    const { folders } = mod.parseImportFiles([f('a/b/c/deep.md')], null);
+    expect(folders).toEqual(['a', 'a/b', 'a/b/c']);
+  });
+});
+
+describe('takeManifest', () => {
+  test('finds the manifest at the vault root and removes it from the notes', () => {
+    const { manifest, rest } = mod.takeManifest([
+      { path: 'manifest.json', text: '{"version":1,"notes":[]}' },
+      { path: 'a.md', text: 'x' },
+    ]);
+    expect(manifest.version).toBe(1);
+    expect(rest.map(f => f.path)).toEqual(['a.md']);
+  });
+
+  test('finds it under our own export root too', () => {
+    const { manifest } = mod.takeManifest([
+      { path: 'byebyenotes-2026-09-16/manifest.json', text: '{"version":1}' },
+    ]);
+    expect(manifest.version).toBe(1);
+  });
+
+  test('a manifest.json DEEPER in the tree is somebody else’s file', () => {
+    // Importing a real vault that happens to contain a project's manifest.json must
+    // not have that file read as ours.
+    const files = [{ path: 'work/project/manifest.json', text: '{"version":9}' }];
+    const { manifest, rest } = mod.takeManifest(files);
+    expect(manifest).toBe(null);
+    expect(rest).toHaveLength(1);
+  });
+
+  test('corrupt JSON costs metadata, not notes', () => {
+    const { manifest, rest } = mod.takeManifest([
+      { path: 'manifest.json', text: '{ broken' },
+      { path: 'a.md', text: 'x' },
+    ]);
+    expect(manifest).toBe(null);
+    expect(rest.map(f => f.path)).toEqual(['a.md']);
+  });
+
+  test('no manifest at all is fine', () => {
+    const files = [{ path: 'a.md', text: 'x' }];
+    expect(mod.takeManifest(files)).toEqual({ manifest: null, rest: files });
+  });
+});
+
+describe('parseImportFiles restores empty folders', () => {
+  const f = (path, text = 'body') => ({ path, text });
+
+  test('a folder with no notes comes back from the manifest', () => {
+    // Nothing in the file list implies an empty folder, so without the manifest the
+    // tree loses structure every time it round-trips.
+    const manifest = { version: 1, folders: ['archive/2025', 'work'], notes: [] };
+    const { folders } = mod.parseImportFiles([f('work/a.md')], manifest);
+    expect(folders).toContain('archive/2025');
+    expect(folders).toContain('archive');
+    expect(folders).toContain('work');
+  });
+
+  test('manifest folders are sanitised like any other path', () => {
+    const manifest = { version: 1, folders: ['../../etc', 'work'] };
+    const { folders } = mod.parseImportFiles([f('work/a.md')], manifest);
+    expect(folders.every(x => !x.includes('..'))).toBe(true);
+  });
+
+  test('a junk folders field is ignored rather than fatal', () => {
+    for (const bad of ['nope', 42, null, {}]) {
+      expect(() => mod.parseImportFiles([f('a.md')], { folders: bad })).not.toThrow();
+    }
+  });
+});
+
+// ── A stored hash must carry its own nid ─────────────────────────────────────
+// loadState derives the live noteId from the decoded hash and mints a fresh one when
+// it is absent, so a snapshot whose hash omits nid opens under a DIFFERENT id and the
+// next save writes a second copy — the imported note orphaned beside it. Pinned here
+// because the rule lives in loadState, far from the three places that write a hash.
+describe('imported notes carry their nid inside the hash', () => {
+  test('parseImportFiles gives every note an nid to embed', () => {
+    const { notes } = mod.parseImportFiles([{ path: 'a.md', text: 'x' }], null);
+    expect(notes[0].nid).toMatch(/^[a-z0-9]{1,10}$/);
+  });
+
+  test('a state encoded with an nid decodes with the same nid', () => {
+    const { notes } = mod.parseImportFiles([{ path: 'a.md', text: 'x' }], null);
+    const n = notes[0];
+    const decoded = mod.decodeState(mod.encodeState({
+      nid: n.nid, blocks: n.blocks, theme: n.theme, font: n.font }));
+    expect(decoded.nid).toBe(n.nid);
+    expect(decoded.blocks).toEqual(n.blocks);
+  });
+
+  test('a state encoded WITHOUT an nid decodes without one — the bug shape', () => {
+    // Documents why the field is load-bearing: nothing downstream can recover it.
+    const decoded = mod.decodeState(mod.encodeState({ blocks: [], theme: null, font: null }));
+    expect(decoded.nid).toBeUndefined();
+  });
+});

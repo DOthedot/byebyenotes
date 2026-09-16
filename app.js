@@ -1207,7 +1207,7 @@ async function syncPull() {
     // tombstoned rows — silently discarded every further edit, with pushNow still
     // reporting success. Re-keying to a fresh id keeps what's on screen and lets it
     // save as a new note, which loses nothing and needs no decision from the user.
-    noteId = Math.random().toString(36).slice(2, 10);
+    noteId = newNid();
     ensureActiveTab();
     syncNow();
     flashCopied('deleted on another device — kept here as a new note');
@@ -1818,6 +1818,7 @@ function buildCommandList() {
     { id: 'settings', label: '/settings', ico: '⚙', desc: 'sidebar background & panel' },
     { id: 'export', label: '/export', ico: '⇩',  desc: 'md · pdf · docx · html' },
     { id: 'exportAll', label: '/exportAll', ico: '⇩⇩', desc: 'every note as a zip vault' },
+    { id: 'import',    label: '/import',    ico: '⇧',  desc: 'a folder or zip of markdown' },
     { id: 'sync',   label: '/sync',   ico: '⟲',  desc: syncKey ? 'turn off cross-device sync' : 'sync notes across devices', hint: syncKey ? 'on' : null },
     { id: 'delete', label: '/delete', ico: '✕',  desc: 'delete current block' },
     { id: 'home',    label: '/home',    ico: '⌂', desc: 'back to the start screen' },
@@ -2026,6 +2027,12 @@ function openPalette(mode, opts = {}) {
     paletteItems = [
       { id: '__none', label: 'no folder', ico: '—', desc: 'top level' },
       ...folders.map(f => ({ id: f, label: f + '/', ico: '▸' })),
+    ];
+  } else if (mode === 'importPick') {
+    paletteTitle.textContent = 'IMPORT — NOTHING IS OVERWRITTEN';
+    paletteItems = [
+      { id: 'imp-folder', label: 'a folder', ico: '▸', desc: 'a vault on disk, subfolders and all' },
+      { id: 'imp-zip',    label: 'a .zip',   ico: '⇧', desc: 'including one /exportAll made' },
     ];
   } else if (mode === 'exportAllOffline') {
     paletteTitle.textContent = "COULDN'T REACH YOUR SYNCED NOTES";
@@ -2303,7 +2310,7 @@ function paletteEscTarget(mode, hasAnchor) {
   if (mode === 'command' || mode === 'insert' || mode === 'format') return 'close';
   if (mode === 'newFolder') return 'newItem';
   if (mode === 'rename') return 'command';
-  if (mode === 'help' || mode === 'settings' || mode === 'newItem' || mode === 'exportAllOffline') return 'command';
+  if (mode === 'help' || mode === 'settings' || mode === 'newItem' || mode === 'exportAllOffline' || mode === 'importPick') return 'command';
   if (mode === 'lang' && hasAnchor) return 'insert';
   return 'command';
 }
@@ -2472,6 +2479,7 @@ function confirmPalette() {
       return;
     }
     if (selected.id === 'exportAll') { closePalette(); exportAll(); return; }
+    if (selected.id === 'import')    { openPalette('importPick'); return; }
     if (selected.id === 'newNote') { startNewNote(); return; }
     if (selected.id === 'newFolder') { openPalette('newFolder'); return; }
     if (selected.id === 'rename')    { renameTarget = noteId; openPalette('rename'); return; }
@@ -2487,6 +2495,13 @@ function confirmPalette() {
   // Its own branch, like newItem: confirmPalette dispatches on paletteMode, and the
   // 'command' branch below only ever sees mode === 'command'. Handlers left in there
   // for this prompt's rows are unreachable — both buttons did nothing.
+  if (paletteMode === 'importPick') {
+    closePalette();
+    if (selected.id === 'imp-folder') pickImportFolder();
+    if (selected.id === 'imp-zip')    pickImportZip();
+    return;
+  }
+
   if (paletteMode === 'exportAllOffline') {
     closePalette();
     if (selected.id === 'ea-local') exportAll({ localOnly: true });
@@ -3577,6 +3592,123 @@ async function uploadPastedImage(file, blockId) {
 // open one. Lossless in practice: a block is only ever 'text' or 'code', and
 // markdown represents both exactly — which is what will let an exported vault be
 // read back in.
+// Turns a flat [{path, text}] list — from a folder picker or from a zip, both of
+// which normalise to the same shape — into notes to create and folders to ensure.
+//
+// Additive only. Every note gets a fresh nid, so an import can never overwrite or
+// delete anything already here; the manifest supplies title, theme and font, never an
+// identity to replace. The worst an unwanted import can do is leave duplicates, which
+// you can delete. That asymmetry is the whole design: a restore-from-backup feature
+// that could destroy the thing it is restoring would be worse than having none.
+// One place that mints a note id. It was written out four times; import needs a fifth
+// and a variant that drifted would be a note that syncs differently from every other.
+function newNid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function parseImportFiles(files, manifest) {
+  const list = Array.isArray(files) ? files : [];
+  const md = list.filter(f => f && typeof f.path === 'string' && /\.md$/i.test(f.path));
+  const skipped = list.length - md.length;
+
+  // Our own export nests everything under byebyenotes-YYYY-MM-DD/. Stripping a root
+  // shared by EVERY file keeps a re-import from burying the vault one level deeper
+  // each time.
+  //
+  // Requires more than one file. A lone 'work/api/auth.md' is a note filed under
+  // work/api, not a vault wrapped in a folder called work — stripping there silently
+  // moved every single-file import up a level.
+  const firstSeg = (p) => p.split('/')[0];
+  const roots = new Set(md.map(f => firstSeg(f.path)));
+  const commonRoot = (md.length > 1 && roots.size === 1 && md.every(f => f.path.includes('/')))
+    ? [...roots][0] : null;
+
+  // A path from a zip is untrusted in exactly the way an exported one is: it becomes
+  // a folder here, and '..' would climb out of the vault.
+  const byPath = new Map();
+  const mNotes = manifest && Array.isArray(manifest.notes) ? manifest.notes : [];
+  mNotes.forEach(n => { if (n && typeof n.path === 'string') byPath.set(n.path, n); });
+
+  // Folders the manifest knows about but no note implies — the empty ones. A vault
+  // exported with an empty folder must come back with it, or the tree quietly loses
+  // structure on every round trip.
+  const folders = new Set();
+  if (manifest && Array.isArray(manifest.folders)) {
+    manifest.folders.forEach(f => {
+      const segs = safePathSegments(f);
+      for (let i = 1; i <= segs.length; i++) folders.add(segs.slice(0, i).join('/'));
+    });
+  }
+
+  const notes = md.map(f => {
+    const rel = commonRoot ? f.path.slice(commonRoot.length + 1) : f.path;
+    const segs = safePathSegments(rel.split('/').slice(0, -1).join('/'));
+    // Every ancestor, so an imported tree shows its empty intermediate folders too.
+    for (let i = 1; i <= segs.length; i++) folders.add(segs.slice(0, i).join('/'));
+
+    // The manifest is keyed by the path as EXPORTED, which is why a vault reorganised
+    // elsewhere stops matching. That is a metadata loss, never a note loss: anything
+    // unmatched falls back to what the file itself says.
+    const meta = byPath.get(f.path) || byPath.get(rel) || null;
+    const fromName = rel.split('/').pop().replace(/\.md$/i, '');
+
+    return {
+      nid: newNid(),
+      title: truncateTitle((meta && meta.title) || fromName || 'untitled', 48),
+      folder: segs.length ? segs.join('/') : null,
+      theme: (meta && typeof meta.theme === 'string') ? meta.theme : null,
+      font:  (meta && typeof meta.font === 'string') ? meta.font : null,
+      blocks: markdownToBlocks(f.text),
+    };
+  });
+
+  return { notes, folders: [...folders].sort(), skipped };
+}
+
+// The inverse of blocksToMarkdown. Only fenced regions are structural — everything
+// else is one text block, because blocks are only ever 'text' or 'code' and splitting
+// prose on blank lines would shatter a note into paragraphs that were never separate.
+//
+// Never returns an empty array: isOpenableSnapshot rejects a note with no blocks, so
+// an empty file has to import as an empty note rather than as nothing at all.
+function markdownToBlocks(text) {
+  const src = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+  const lines = src.split('\n');
+  const blocks = [];
+  let prose = [];
+
+  const flushProse = () => {
+    // Trailing blank lines before a fence belong to the separator, not the prose.
+    while (prose.length && prose[prose.length - 1] === '') prose.pop();
+    if (prose.length) blocks.push({ type: 'text', lang: null, content: prose.join('\n') });
+    prose = [];
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const open = /^```(.*)$/.exec(lines[i]);
+    if (!open) { prose.push(lines[i]); continue; }
+
+    flushProse();
+    // The fence's info string becomes a highlight.js class name, so it is constrained
+    // to the same slug shape the server accepts rather than trusted as written.
+    const raw = open[1].trim();
+    const lang = /^[a-z0-9+#-]{1,24}$/i.test(raw) ? raw : null;
+
+    const body = [];
+    i++;
+    // An unterminated fence runs to the end of the file. Throwing, or treating the
+    // rest as prose, would both lose the author's intent for a file that is merely
+    // unfinished.
+    while (i < lines.length && !/^```\s*$/.test(lines[i])) body.push(lines[i++]);
+    blocks.push({ type: 'code', lang, content: body.join('\n') });
+    // Skip the blank line a serialised block leaves after its closing fence.
+    if (lines[i + 1] === '') i++;
+  }
+  flushProse();
+
+  return blocks.length ? blocks : [{ type: 'text', lang: null, content: '' }];
+}
+
 function blocksToMarkdown(list) {
   return (list || []).map(b => {
     const text = typeof b.content === 'string' ? b.content : '';
@@ -3685,6 +3817,180 @@ function downloadBlob(blob, filename) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// Reads a <input type=file> selection into the [{path, text}] shape parseImportFiles
+// wants. A directory picker reports each file's position via webkitRelativePath; a
+// plain pick has only a name. Non-markdown files are read anyway but discarded by the
+// parser, so the filter lives in one place rather than two.
+function readPickedFiles(fileList) {
+  const files = [...fileList];
+  return Promise.all(files.map(file => new Promise(resolve => {
+    const path = file.webkitRelativePath || file.name;
+    if (!/\.md$/i.test(path)) return resolve({ path, text: '' });
+    const fr = new FileReader();
+    fr.onload  = () => resolve({ path, text: String(fr.result || '') });
+    // One unreadable file must not lose the other nine hundred.
+    fr.onerror = () => resolve({ path, text: '' });
+    fr.readAsText(file);
+  })));
+}
+
+// A zip, read through the same lens. JSZip loads on first use, exactly as it does for
+// the export side.
+// Bounds on what a zip may expand to. A zip is compressed, so a small file can
+// decompress to something enormous — the archive is not necessarily a stranger's, but
+// it is not necessarily yours either, and neither the entry count nor the unpacked
+// size is visible until it is already in memory.
+const IMPORT_MAX_ENTRIES = 5000;
+const IMPORT_MAX_BYTES   = 64 * 1024 * 1024;
+
+async function readZipFiles(file) {
+  await loadScriptOnce(JSZIP_URL);
+  const zip = await JSZip.loadAsync(file);
+  const out = [];
+  const entries = [];
+  zip.forEach((path, entry) => { if (!entry.dir) entries.push([path, entry]); });
+  if (entries.length > IMPORT_MAX_ENTRIES) {
+    throw new Error(`that zip holds ${entries.length} files — more than import will read at once`);
+  }
+  let bytes = 0;
+  for (const [path, entry] of entries) {
+    // Only markdown and the manifest are read; a vault full of images would otherwise
+    // be decoded to text for nothing.
+    if (/\.md$/i.test(path) || /(^|\/)manifest\.json$/i.test(path)) {
+      const text = await entry.async('string');
+      bytes += text.length;
+      // Checked as it accumulates, not up front: the unpacked size of a zip cannot be
+      // known without unpacking it, so the only honest guard is to stop partway.
+      if (bytes > IMPORT_MAX_BYTES) throw new Error('that zip unpacks to more than import will hold');
+      out.push({ path, text });
+    } else {
+      out.push({ path, text: '' });
+    }
+  }
+  return out;
+}
+
+// Pulls the manifest out of the file list, leaving the notes behind. It travels at the
+// vault root, so a manifest.json nested inside a folder is somebody's own file and is
+// left alone to import as nothing.
+function takeManifest(files) {
+  const i = files.findIndex(f => /^(?:[^\/]+\/)?manifest\.json$/i.test(f.path));
+  if (i === -1) return { manifest: null, rest: files };
+  const rest = files.slice();
+  const [entry] = rest.splice(i, 1);
+  try { return { manifest: JSON.parse(entry.text), rest }; }
+  catch (e) { return { manifest: null, rest }; }   // corrupt: costs metadata, not notes
+}
+
+// Creates the notes. Everything above this line is pure; this is the part that writes.
+function commitImport(parsed) {
+  if (!parsed.notes.length) {
+    return flashCopied(parsed.skipped ? 'nothing to import — no .md files found' : 'nothing to import');
+  }
+
+  // An import that would push existing notes past SNAP_MAX stops instead. saveSnapshot
+  // drops the oldest to make room, which is right for one note arriving at a time and
+  // wrong here: a restore feature that quietly deletes the notes you already had to
+  // make space for a backup has destroyed the thing it was meant to protect. Trimming
+  // the IMPORT is recoverable — the file is still on disk — so the loss falls on the
+  // side that can be undone.
+  const existing = loadSnapshots().length;
+  const room = Math.max(0, SNAP_MAX - existing);
+  const incoming = parsed.notes.slice(0, room);
+  const turnedAway = parsed.notes.length - incoming.length;
+
+  if (!incoming.length) {
+    return flashCopied(`no room — this device already holds ${existing} notes`);
+  }
+
+  // Folders first, so a note landing in one finds it already there.
+  parsed.folders.forEach(f => addFolder(f));
+
+  // Assembled as one list and written once, rather than calling saveSnapshot per note.
+  // That path re-reads and re-serialises the entire store on every call, so importing
+  // a thousand notes would parse and stringify a thousand ever-growing lists on the
+  // main thread — quadratic, with the tab frozen throughout.
+  const merged = loadSnapshots();
+  incoming.forEach(n => {
+    // nid goes INSIDE the hash, not just beside it. loadState reads noteId back out of
+    // the decoded hash and mints a fresh one when it is missing, so a note stored
+    // without it opens under a different id — and the next save writes a second copy,
+    // orphaning the imported one. Every other writer of a snapshot hash embeds it
+    // (collectState, wireNoteToSnapshot); this one has to as well.
+    const hash = encodeState({ nid: n.nid, blocks: n.blocks, theme: n.theme, font: n.font });
+    merged.unshift({ nid: n.nid, title: n.title, hash, t: Date.now(), folder: n.folder, renamed: true });
+  });
+
+  // The writer autosave uses, so the byte ceiling and its warning cover imports too.
+  const kept = writeSnapshots(merged);
+  if (kept === -1) {
+    return warnStorage('this browser’s storage is full — nothing was imported');
+  }
+  // Counted by identity, not by arithmetic. `kept - existing` is only the number of
+  // arrivals while the byte ceiling stays out of it: when writeSnapshots trims for
+  // size it takes from the oldest END, so `kept` can fall BELOW `existing` with every
+  // imported note still present at the front — and the subtraction then clamps to
+  // zero and reports "imported 0 notes" for an import that fully succeeded. A false
+  // failure is worse than a wrong number here, because the obvious response to it is
+  // to import again and make duplicates.
+  const landed = new Set(loadSnapshots().map(x => x.nid));
+  const saved = incoming.reduce((n, x) => n + (landed.has(x.nid) ? 1 : 0), 0);
+  schedulePush();
+
+  renderRecent();
+  renderSidebar();
+  const f = parsed.folders.length;
+  // `turnedAway` is what this device had no room for; `saved < incoming.length` is what
+  // storage refused. Both are "did not arrive", but only the first is about the cap,
+  // and saying "would not fit" for either is honest about the outcome.
+  const missing = turnedAway + (incoming.length - saved);
+  flashCopied(
+    `imported ${saved} note${saved === 1 ? '' : 's'}` +
+    (f ? ` into ${f} folder${f === 1 ? '' : 's'}` : '') +
+    (missing ? ` · ${missing} would not fit` : '') +
+    (parsed.skipped ? ` · ${parsed.skipped} non-markdown skipped` : '')
+  );
+}
+
+function runImport(files) {
+  const { manifest, rest } = takeManifest(files);
+  commitImport(parseImportFiles(rest, manifest));
+}
+
+// The picker is created per use and never attached to the document: a stray <input>
+// left in the DOM would be one more thing for a later selector to trip over.
+function openPicker(attrs, handler) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  Object.assign(input, attrs);
+  input.addEventListener('change', async () => {
+    if (!input.files || !input.files.length) return;
+    try {
+      flashCopied('reading…');
+      await handler(input.files);
+    } catch (e) {
+      // The bounds above throw with a specific reason; anything else gets the generic
+      // one. Saying "too big" when that is the truth beats a shrug.
+      flashCopied(e && /zip|import/.test(String(e.message))
+        ? e.message
+        : 'could not read that — is it a folder of .md files?');
+    }
+  }, { once: true });
+  input.click();
+}
+
+function pickImportFolder() {
+  // webkitdirectory is non-standard but supported everywhere this app runs; the zip
+  // path is the fallback when a browser refuses it.
+  openPicker({ webkitdirectory: true, multiple: true },
+    async (files) => runImport(await readPickedFiles(files)));
+}
+
+function pickImportZip() {
+  openPicker({ accept: '.zip,application/zip' },
+    async (files) => runImport(await readZipFiles(files[0])));
 }
 
 // Holds the whole vault in memory at once. Comfortable for the hundreds of notes this
@@ -3807,7 +4113,7 @@ function startNewNote() {
 }
 
 function newNote() {
-  noteId = Math.random().toString(36).slice(2, 10);
+  noteId = newNid();
   // Claim the pending folder for *this* note id, so a later save can't misapply it.
   pendingFolder = nextNoteFolder !== null ? { nid: noteId, folder: nextNoteFolder } : null;
   nextNoteFolder = null;
@@ -4816,7 +5122,7 @@ function loadState() {
   if (state && Array.isArray(state.blocks) && state.blocks.length > 0) {
     currentFont  = FONTS.includes(state.font)   ? state.font  : 'jetbrains-mono';
     currentTheme = THEMES.includes(state.theme) ? state.theme : 'monokai';
-    noteId = typeof state.nid === 'string' ? state.nid : Math.random().toString(36).slice(2, 10);
+    noteId = typeof state.nid === 'string' ? state.nid : newNid();
     // A note you've already made yours (it's in your own local/synced recents)
     // should look like your other notes — your current theme/font wins over
     // whatever was saved with it. A note you've never touched before (e.g. a
@@ -4834,7 +5140,7 @@ function loadState() {
     });
     lastUrlLen = (window.location.origin + window.location.pathname + '#' + hash).length;
   } else {
-    noteId = Math.random().toString(36).slice(2, 10);
+    noteId = newNid();
     blocks = [createBlock('text')];
     lastUrlLen = 0;
     // Fresh note: start in the user's preferred theme/font instead of the defaults
@@ -4998,6 +5304,6 @@ if (typeof module !== 'undefined') {
     PUSH_BATCH, chunk, cheapHash, noteFingerprint, isQuotaError,
     normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
-    snapshotToWireNote, wireNoteToSnapshot, blocksToMarkdown, safeFileName, safePathSegments, buildExportTree, loadScriptOnce, __resetScriptCache,
+    snapshotToWireNote, wireNoteToSnapshot, newNid, blocksToMarkdown, markdownToBlocks, parseImportFiles, takeManifest, safeFileName, safePathSegments, buildExportTree, loadScriptOnce, __resetScriptCache,
   };
 }
