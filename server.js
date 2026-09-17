@@ -12,7 +12,7 @@
 // byte-identical and keep working on Vercel unchanged. Deploying here does not
 // fork the app; it's the same files behind a different front door.
 //
-// Requires Node 18+ (api/*.js call global fetch).
+// Requires Node 20+ (the floor of the `redis` client that api/redis.js uses).
 
 const http = require('http');
 const fs   = require('fs');
@@ -22,7 +22,7 @@ const url  = require('url');
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT) || 3000;   // Railway injects PORT
 
-// Mirrors api/img.js's own cap (MAX_B64) with headroom for the JSON envelope;
+// Mirrors notes-store.js's upload cap (MAX_UPLOAD_B64) with headroom for the JSON envelope;
 // without a limit an unbounded POST body would sit in memory until OOM.
 const MAX_BODY_BYTES = 6 * 1024 * 1024;
 
@@ -160,7 +160,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       db: Boolean(process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL),
       pepper: Boolean(process.env.SYNC_PEPPER),
-      kv: Boolean(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL),
+      redis: Boolean(process.env.REDIS_URL),
     }));
   }
 
@@ -198,14 +198,14 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   const db     = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
   const pepper = process.env.SYNC_PEPPER;
-  const kv     = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const redis  = process.env.REDIS_URL;
   console.log(`byebyenotes listening on :${PORT}`);
   // Say which half is missing. "sync is broken" with no hint as to which of two
   // env vars is unset is the kind of thing that eats an afternoon.
   console.log(db && pepper
-    ? '/api/sync -> Postgres.'
-    : `/api/sync returns 503 — missing ${[!db && 'DATABASE_URL', !pepper && 'SYNC_PEPPER'].filter(Boolean).join(' and ')}.`);
-  console.log(kv
-    ? '/api/img and tiny links -> KV.'
-    : 'No KV env vars — pasted images and tiny links return 503 by design.');
+    ? '/api/sync and /api/img -> Postgres.'
+    : `/api/sync and image uploads return 503 — missing ${[!db && 'DATABASE_URL', !pepper && 'SYNC_PEPPER'].filter(Boolean).join(' and ')}.`);
+  console.log(redis
+    ? 'tiny links -> Redis.'
+    : 'No REDIS_URL — tiny links return 503 by design; sharing falls back to the full-hash link.');
 });

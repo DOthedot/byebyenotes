@@ -13,6 +13,7 @@
     "testEnvironment": "jsdom"
   },
   "dependencies": {
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "redis": "^6.2.1"
   }
 }

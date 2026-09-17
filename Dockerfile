@@ -2,7 +2,7 @@
 # nothing to compile, so this stays a single stage; the only install is `pg`.
 FROM node:20-alpine
 
-# Node 18+ is required: api/*.js use global fetch.
+# Node 20+ is required: the `redis` client's engine floor.
 WORKDIR /app
 
 # Dependencies first, on their own layer, so editing app.js does not reinstall.

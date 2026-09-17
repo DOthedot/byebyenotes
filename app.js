@@ -3694,7 +3694,24 @@ function updateImageLine(blockId, lineIdx, changes) {
 }
 
 // ── Pasted images (compressed client-side, stored via /api/img) ───────────────
+// What a failed (or impossible) paste tells the user. Keyed on the server's `error`
+// text before its status, because the status alone is ambiguous: 400 is both a bad
+// sync key and a bad image, and 413 is both one oversized image and a full quota.
+function imageUploadMessage(status, error, hasSyncKey) {
+  if (!hasSyncKey) return 'turn on /sync to paste images';
+  if (error === 'bad key' || error === 'key rejected') return 'sync key rejected — image not uploaded';
+  if (error === 'quota exceeded') return 'image storage full (50 MB)';
+  if (error === 'too large' || status === 413) return 'image too large';
+  return 'image upload failed';
+}
+
+// Images are stored against the sync account (api/img.js), so without a key there is
+// nothing to upload to — say so before compressing anything.
 async function uploadPastedImage(file, blockId) {
+  if (!syncKey) {
+    flashCopied(imageUploadMessage(0, null, false));
+    return;
+  }
   flashCopied('uploading image…');
   try {
     // Downscale to keep uploads small — 1200px is plenty for a note
@@ -3714,10 +3731,14 @@ async function uploadPastedImage(file, blockId) {
 
     const res = await fetch('/api/img', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-sync-key': syncKey },
       body: JSON.stringify({ type: blob.type, data: b64 }),
     });
-    if (!res.ok) throw new Error('upload failed');
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      flashCopied(imageUploadMessage(res.status, body && body.error, true));
+      return;
+    }
     const { id } = await res.json();
 
     focusBlock(blockId, true);
@@ -3725,7 +3746,7 @@ async function uploadPastedImage(file, blockId) {
       `![image|480](${window.location.origin}/api/img?id=${id})`);
     flashCopied('image added ✓');
   } catch (e) {
-    flashCopied('image upload failed — needs the deployed site + KV');
+    flashCopied(imageUploadMessage(0, null, true));
   }
 }
 
@@ -5452,7 +5473,7 @@ if (typeof module !== 'undefined') {
     nextNavIndex, buildCommandList, buildHelpList, makeRecentRow, isOpenableSnapshot,
     langIcon, langBadgeHtml, soleLang, fileLabel, paletteEscTarget, restorableCaret, caretScrollDelta,
     themeMode, sortThemesByMode, THEMES, THEME_MODE, HLJS_THEME_URLS,
-    parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
+    parseTinyId, tinyExpiryLabel, TINY_EXPIRY, imageUploadMessage,
     normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS, SIDEBAR_STEPS,
     normalizeSurfaceBg, SURFACE_BG_DEFAULTS, customFingerprint, wallpapersFor, buildSyncPrefs,
     PUSH_BATCH, chunk, cheapHash, noteFingerprint, isQuotaError, syncState, agoLabel,

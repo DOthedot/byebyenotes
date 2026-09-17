@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 23 files, **202 tests** — all green.
+- **Suite:** 31 files, **494 tests** — all green.
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -22,9 +22,10 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `LZString` | `compressToEncodedURIComponent = btoa`, `decompress… = atob` (null on throw) | Real LZ-String isn't loaded in jsdom; base64 is a good-enough reversible stand-in so `encodeState`/`decodeState` can round-trip. |
 | `hljs` | `highlight: (text) => ({ value: text })` | highlight.js is a CDN dep; the stub returns text unchanged so `buildBlockEl` for code blocks doesn't crash. Only `blocks.test.js` needs it. |
 
-**Exception:** `notes-store.test.js` tests `api/`, not `app.js`. It declares
-`@jest-environment node` in a docblock and needs neither stub — server code has no
-browser globals to fake, and running it under jsdom would only hide that fact.
+**Exception:** the `api/` suites — `notes-store`, `api-tiny`, `api-img`, `api-redis`,
+`ids` — test server code, not `app.js`. Each declares `@jest-environment node` in a
+docblock and needs neither stub — server code has no browser globals to fake, and
+running it under jsdom would only hide that fact.
 
 > **Adding a pure function?** Export it in the `module.exports` block at the bottom of
 > `app.js`, then add a case to the most relevant file below (or a new `*.test.js`).
@@ -66,10 +67,14 @@ browser globals to fake, and running it under jsdom would only hide that fact.
 | `caretScrollDelta` | `scroll-caret.test.js` | Pixels to scroll `#document-container` so the caret stays visible with a margin (positive = down, negative = up, 0 = fine). The seam behind `scrollCaretIntoView`, which keeps Enter from dropping the caret below the fold (issue #26). |
 | `parseTinyId` | `tiny.test.js` | `/s/<id>` path → validated tiny id, or `null`. |
 | `tinyExpiryLabel`, `TINY_EXPIRY` | `tiny.test.js` | Expiry-option list (24hr first) + ttl→label with 24hr fallback. |
-| `api/tiny.js` handler | `api-tiny.test.js` | The serverless handler itself (not an `app.js` export) — see its section below. |
+| `api/tiny.js` handler | `api-tiny.test.js` | The short-link handler itself (not an `app.js` export) — see its section below. |
+| `api/img.js` handler | `api-img.test.js` | Pasted images in Postgres — authenticated upload, quota, public GET. |
+| `api/redis.js` | `api-redis.test.js` | The Redis client owner — its fail-fast contract. |
+| `api/ids.js` `randomId` | `ids.test.js` | `crypto`-random `[a-z0-9]` ids. |
+| `imageUploadMessage` | `image-upload.test.js` | Failed-paste status + server error text → the toast shown. |
 
 Not yet unit-tested (browser/integration territory): palette/keyboard handling,
-`syncNow`/URL persistence, image paste + `/api/img`, sync round-trip + `/api/sync`,
+`syncNow`/URL persistence, the image paste DOM flow, sync round-trip + `/api/sync`,
 theme/font application, focus mode, export. (The DOM wiring of Home-screen keyboard
 nav — row collection, `.kb-active`, Enter dispatch — is browser-verified; only its
 pure index math `nextNavIndex` is unit-tested here.)
@@ -273,26 +278,96 @@ resolution) is browser-verified, not here.
 | `TINY_EXPIRY` lists 24hr first, four options | `[0].ttl === 86400`; ttls are exactly `{60,1800,21600,86400}`. | Default is 24hr; the select + api share this option set. |
 | `tinyExpiryLabel` maps ttl → label, falls back to 24hr | `1800→'30min'`, `86400→'24hr'`, unknown→`'24hr'`. | Footer text ("expires in …") stays correct. |
 
-## `api-tiny.test.js` — the `api/tiny.js` serverless handler (8 tests)
+## `image-upload.test.js` — paste-image toasts (6 tests)
 
-The only test that drives a **serverless handler** directly (the others test `app.js`
-exports). It `require`s `api/tiny.js` with a mocked `(req, res)` and a mocked KV REST
-endpoint (`global.fetch`); env is set per-case so the handler's load-time KV detection is
-exercised. Mirrors the fail-soft contract in [`../api/README.md`](../api/README.md).
+`imageUploadMessage(status, error, hasSyncKey)`. The upload itself needs a browser and a
+server, so only the choice of message is unit-tested. It keys on the `error` text before
+the status, because `400` is both a bad key and a bad image and `413` is both one
+oversized image and a full quota.
 
 | Test | Asserts |
 |------|---------|
-| 503 when KV not configured | No KV env → `503`. |
-| POST rejects a ttl not in the allowed set | `ttl` outside `{60,1800,21600,86400}` → `400`. |
-| POST stores the hash with a Redis TTL and returns an id | `200 {id}` (id matches `/^[a-z0-9]{6,12}$/`) and the kv command is `['SET','tiny:<id>',hash,'EX',ttl]`. |
-| POST rejects an oversized hash | hash > 200000 chars → `413`. |
-| GET unknown id returns 404 | kv returns null → `404`. |
-| GET known id returns the stored hash | kv returns the value → `200 {hash}`. |
-| GET bad id returns 400 | id failing `/^[a-z0-9]{6,12}$/` → `400`. |
-| unsupported method returns 405 | `DELETE` → `405`. |
+| signed out points at /sync | `turn on /sync to paste images`, before any request. |
+| a bad or rejected sync key names the key | `bad key` / `key rejected`. |
+| too large and quota exceeded share 413 but not a message | Two distinct messages. |
+| a 400 bad image is a generic failure | Not mistaken for a key problem. |
+| a 413 from server.js's body limit still reads as too large | `payload too large` falls back on the status. |
+| everything else is a generic failure | 5xx, missing DB config, network error. |
 
-> **Note:** this suite adds handler coverage, but the true end-to-end path (real KV,
-> `/s/<id>` rewrite) is only exercised on the deployed site — see `AGENTS.md → Gotchas`.
+## `api-tiny.test.js` — the `api/tiny.js` handler (13 tests)
+
+`@jest-environment node`. Drives the exported handler with a mocked `(req, res)` and
+`jest.mock('../api/redis')`, so the handler's contract — validation, collision-safe id
+allocation, fail-soft statuses — is tested without a live Redis. `api/ids.js` is real.
+Mirrors [`../api/README.md`](../api/README.md).
+
+| Test | Asserts |
+|------|---------|
+| 503 when Redis is not configured | `isConfigured()` false → `503 tiny url not configured`, nothing written. |
+| POST rejects a ttl not in the allowed set | `ttl` outside `{60,1800,21600,86400}` → `400`. |
+| POST rejects a missing hash | No `hash` → `400`. |
+| POST rejects an oversized hash | > 200000 chars → `413`, nothing written. |
+| POST stores the hash under tiny:<id> with its ttl | `200 {id, ttl}`, id matches `/^[a-z0-9]{6,12}$/`, `setIfAbsent('tiny:<id>', hash, ttl)`. |
+| POST retries with a fresh id when the first is taken | `false` then `true` → two different keys; the second is returned. |
+| POST gives up with 502 after three collisions | Exactly 3 attempts. |
+| POST returns 502 when Redis throws | `redis unavailable` — the share panel's cue to fall back to the full-hash link. |
+| GET bad id returns 400 | Fails `/^[a-z0-9]{6,12}$/`; Redis not called. |
+| GET unknown id returns 404 | `get('tiny:<id>')` → `null`. |
+| GET known id returns the stored hash, uncached | `200 {hash}`, `Cache-Control: no-store`. |
+| GET returns 502 when Redis throws | Same fallback as POST. |
+| unsupported method returns 405 | `Allow: GET, POST`. |
+
+> **Note:** the true end-to-end path (real Redis, `/s/<id>` rewrite) is only exercised on
+> the deployed site — see `AGENTS.md → Gotchas`.
+
+## `ids.test.js` — `api/ids.js` (2 tests)
+
+| Test | Asserts |
+|------|---------|
+| randomId returns exactly the requested length from [a-z0-9] | Lengths 6, 8, 12, 16. |
+| randomId does not repeat across many calls | 1000 ids of length 8 are all distinct. |
+
+## `api-redis.test.js` — the Redis connection owner (8 tests)
+
+`@jest-environment node`. Mocks the `redis` package with an `EventEmitter` standing in
+for the client, so what is pinned is `api/redis.js`'s **fail-fast contract**, not the
+wire protocol: a short link that can't be stored costs a fallback URL, but a request
+hanging on a dead Redis costs a frozen share panel.
+
+| Test | Asserts |
+|------|---------|
+| isConfigured follows REDIS_URL | Read at call time, not load time. |
+| rejects without creating a client when REDIS_URL is unset | `redis not configured`; `createClient` never called. |
+| creates one fail-fast client and reuses it | One `createClient` for two calls, with the URL, `disableOfflineQueue: true`, `connectTimeout: 5000` and the capped backoff; `connect()` once; an `error` listener attached (an unlistened `error` would crash the server). |
+| get returns the stored value | Passes the key through. |
+| setIfAbsent sends EX + NX and maps OK to true | `set(key, value, { EX, NX: true })`. |
+| setIfAbsent maps a null reply to false | `null` means the key existed — the caller's collision signal. |
+| waits for ready, then runs the command | A `ready` event mid-call lets the command through. |
+| rejects after READY_TIMEOUT_MS when never ready | Fake timers; `redis not ready`, the command is never sent, the `ready` listener is removed. |
+
+---
+
+## `api-img.test.js` — the `api/img.js` handler (13 tests)
+
+`@jest-environment node`. Mocks `api/db` and `api/auth`; `notes-store` and `ids` are
+real. The contract: uploads belong to a sync account and respect a 50 MB quota; viewing
+is public, because a shared note must render for someone who never signed in.
+
+| Test | Asserts |
+|------|---------|
+| POST passes a bad-key AuthError through | `400 {error:'bad key'}`, no query. |
+| POST passes a rejected-key AuthError through as 403 | Status and message preserved. |
+| POST rejects a disallowed type with 400 bad image | Table untouched. |
+| POST rejects an oversized upload with 413 too large | Over 500 000 base64 chars. |
+| POST stores decoded bytes under the caller | Params: generated id, user id, mime, a `Buffer` of the decoded bytes, its length, the 50 MB quota. |
+| POST answers 413 quota exceeded | The quota guard inserted nothing (`rowCount 0`). |
+| POST retries once on a primary-key collision | `23505` → a second attempt with a different id, which is the one returned. |
+| POST returns 502 when the database fails | `database unavailable`. |
+| GET 503 when the database is not configured | `image store not configured`. |
+| GET 400 for a malformed id | Fails `/^[a-z0-9]{8,16}$/`; no query. |
+| GET 404 for an unknown id | Includes every image from the removed KV store. |
+| GET serves bytes publicly with immutable, nosniff headers | No `resolveUser` call; exact `SELECT`. |
+| unsupported method returns 405 | `Allow: GET, POST`. |
 
 ## `asset-paths.test.js` — index.html asset references (2 tests)
 
@@ -309,7 +384,7 @@ root-absolute so they load identically from `/` and `/s/<id>`.
 
 ---
 
-## `notes-store.test.js` — the untrusted-payload boundary (32 tests)
+## `notes-store.test.js` — the untrusted-payload boundary (69 tests)
 
 Tests `api/notes-store.js`, the pure half of `/api/sync`. Every value here arrives from
 a browser holding a sync key and is then handed to **another of that user's devices to
@@ -325,6 +400,7 @@ never markup, never a resurrected note.
 | `sanitizeNotes` | One broken note doesn't strand every other note in the batch; a duplicate `nid` collapses to the last — Postgres refuses to let one upsert touch a row twice, which would fail the whole push; batch is capped. |
 | `sanitizePrefs` | Strips the wallpaper (it has its own column and its own budget); rejects rather than truncates over 32KB — half-written prefs are worse than stale ones; only a plain object qualifies. |
 | `sanitizeImage` | Inline `data:` images only — a remote URL would make every sidebar render fetch a third party; rejects `data:text/html`, `javascript:`, and anything over the column cap. |
+| `sanitizeUpload` | A pasted image for `api/img.js`: allowlisted types only (no SVG — it can carry script); rejects malformed base64 rather than letting `Buffer.from` silently skip bad characters into a truncated image; exactly 500 000 chars passes, more is `too large` (→ 413), everything else `bad image` (→ 400); returns decoded bytes so the table stores `bytea`. |
 | `rowToNote` | `updated_at_ms` arrives from `pg` as a **string** (bigint) and must become a number, or `mergeRecents` sorts wrong; tombstones are flagged. |
 
 ---
