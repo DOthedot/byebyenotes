@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 23 files, **202 tests** — all green.
+- **Suite:** 24 files, **210 tests** — all green.
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -293,6 +293,26 @@ exercised. Mirrors the fail-soft contract in [`../api/README.md`](../api/README.
 
 > **Note:** this suite adds handler coverage, but the true end-to-end path (real KV,
 > `/s/<id>` rewrite) is only exercised on the deployed site — see `AGENTS.md → Gotchas`.
+
+## `api-redis.test.js` — the Redis connection owner (8 tests)
+
+`@jest-environment node`. Mocks the `redis` package with an `EventEmitter` standing in
+for the client, so what is pinned is `api/redis.js`'s **fail-fast contract**, not the
+wire protocol: a short link that can't be stored costs a fallback URL, but a request
+hanging on a dead Redis costs a frozen share panel.
+
+| Test | Asserts |
+|------|---------|
+| isConfigured follows REDIS_URL | Read at call time, not load time. |
+| rejects without creating a client when REDIS_URL is unset | `redis not configured`; `createClient` never called. |
+| creates one fail-fast client and reuses it | One `createClient` for two calls, with the URL, `disableOfflineQueue: true`, `connectTimeout: 5000` and the capped backoff; `connect()` once; an `error` listener attached (an unlistened `error` would crash the server). |
+| get returns the stored value | Passes the key through. |
+| setIfAbsent sends EX + NX and maps OK to true | `set(key, value, { EX, NX: true })`. |
+| setIfAbsent maps a null reply to false | `null` means the key existed — the caller's collision signal. |
+| waits for ready, then runs the command | A `ready` event mid-call lets the command through. |
+| rejects after READY_TIMEOUT_MS when never ready | Fake timers; `redis not ready`, the command is never sent, the `ready` listener is removed. |
+
+---
 
 ## `asset-paths.test.js` — index.html asset references (2 tests)
 
