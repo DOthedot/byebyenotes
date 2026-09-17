@@ -326,6 +326,28 @@ hanging on a dead Redis costs a frozen share panel.
 
 ---
 
+## `api-img.test.js` — the `api/img.js` handler (13 tests)
+
+`@jest-environment node`. Mocks `api/db` and `api/auth`; `notes-store` and `ids` are
+real. The contract: uploads belong to a sync account and respect a 50 MB quota; viewing
+is public, because a shared note must render for someone who never signed in.
+
+| Test | Asserts |
+|------|---------|
+| POST passes a bad-key AuthError through | `400 {error:'bad key'}`, no query. |
+| POST passes a rejected-key AuthError through as 403 | Status and message preserved. |
+| POST rejects a disallowed type with 400 bad image | Table untouched. |
+| POST rejects an oversized upload with 413 too large | Over 500 000 base64 chars. |
+| POST stores decoded bytes under the caller | Params: generated id, user id, mime, a `Buffer` of the decoded bytes, its length, the 50 MB quota. |
+| POST answers 413 quota exceeded | The quota guard inserted nothing (`rowCount 0`). |
+| POST retries once on a primary-key collision | `23505` → a second attempt with a different id, which is the one returned. |
+| POST returns 502 when the database fails | `database unavailable`. |
+| GET 503 when the database is not configured | `image store not configured`. |
+| GET 400 for a malformed id | Fails `/^[a-z0-9]{8,16}$/`; no query. |
+| GET 404 for an unknown id | Includes every image from the removed KV store. |
+| GET serves bytes publicly with immutable, nosniff headers | No `resolveUser` call; exact `SELECT`. |
+| unsupported method returns 405 | `Allow: GET, POST`. |
+
 ## `asset-paths.test.js` — index.html asset references (2 tests)
 
 Not a function test — it reads `index.html` as text. Guards **issue #17**: a tiny link
