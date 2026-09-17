@@ -273,6 +273,22 @@ resolution) is browser-verified, not here.
 | `TINY_EXPIRY` lists 24hr first, four options | `[0].ttl === 86400`; ttls are exactly `{60,1800,21600,86400}`. | Default is 24hr; the select + api share this option set. |
 | `tinyExpiryLabel` maps ttl → label, falls back to 24hr | `1800→'30min'`, `86400→'24hr'`, unknown→`'24hr'`. | Footer text ("expires in …") stays correct. |
 
+## `image-upload.test.js` — paste-image toasts (6 tests)
+
+`imageUploadMessage(status, error, hasSyncKey)`. The upload itself needs a browser and a
+server, so only the choice of message is unit-tested. It keys on the `error` text before
+the status, because `400` is both a bad key and a bad image and `413` is both one
+oversized image and a full quota.
+
+| Test | Asserts |
+|------|---------|
+| signed out points at /sync | `turn on /sync to paste images`, before any request. |
+| a bad or rejected sync key names the key | `bad key` / `key rejected`. |
+| too large and quota exceeded share 413 but not a message | Two distinct messages. |
+| a 400 bad image is a generic failure | Not mistaken for a key problem. |
+| a 413 from server.js's body limit still reads as too large | `payload too large` falls back on the status. |
+| everything else is a generic failure | 5xx, missing DB config, network error. |
+
 ## `api-tiny.test.js` — the `api/tiny.js` handler (13 tests)
 
 `@jest-environment node`. Drives the exported handler with a mocked `(req, res)` and
