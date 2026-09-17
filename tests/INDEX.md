@@ -341,7 +341,7 @@ root-absolute so they load identically from `/` and `/s/<id>`.
 
 ---
 
-## `notes-store.test.js` — the untrusted-payload boundary (32 tests)
+## `notes-store.test.js` — the untrusted-payload boundary (69 tests)
 
 Tests `api/notes-store.js`, the pure half of `/api/sync`. Every value here arrives from
 a browser holding a sync key and is then handed to **another of that user's devices to
@@ -357,6 +357,7 @@ never markup, never a resurrected note.
 | `sanitizeNotes` | One broken note doesn't strand every other note in the batch; a duplicate `nid` collapses to the last — Postgres refuses to let one upsert touch a row twice, which would fail the whole push; batch is capped. |
 | `sanitizePrefs` | Strips the wallpaper (it has its own column and its own budget); rejects rather than truncates over 32KB — half-written prefs are worse than stale ones; only a plain object qualifies. |
 | `sanitizeImage` | Inline `data:` images only — a remote URL would make every sidebar render fetch a third party; rejects `data:text/html`, `javascript:`, and anything over the column cap. |
+| `sanitizeUpload` | A pasted image for `api/img.js`: allowlisted types only (no SVG — it can carry script); rejects malformed base64 rather than letting `Buffer.from` silently skip bad characters into a truncated image; exactly 500 000 chars passes, more is `too large` (→ 413), everything else `bad image` (→ 400); returns decoded bytes so the table stores `bytea`. |
 | `rowToNote` | `updated_at_ms` arrives from `pg` as a **string** (bigint) and must become a number, or `mergeRecents` sorts wrong; tombstones are flagged. |
 
 ---

@@ -18,6 +18,8 @@ const MAX_IMAGE_BYTES         = 200000;   // matches user_prefs_image_size in 00
 const MAX_TITLE               = 48;       // app.js truncates renames to the same
 const FOLDER_MAX_DEPTH        = 12;       // mirrors FOLDER_MAX_DEPTH in app.js
 const BLOCK_TYPES             = new Set(['text', 'code']);
+const MAX_UPLOAD_B64          = 500000;   // ~375KB decoded — a pasted image after client compression
+const UPLOAD_TYPES            = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);  // matches the mime CHECK in 003_images.sql
 
 // Postgres rejects JSON containing an unpaired UTF-16 surrogate outright ("invalid
 // input syntax for type json"), and that error aborts the whole transaction — so ONE
@@ -247,6 +249,26 @@ function sanitizeImage(raw) {
   return s;
 }
 
+// A pasted image for api/img.js: { type, data } with data the bare base64 the client's
+// FileReader produced. Returns the decoded bytes, so the table stores bytea and never the
+// base64 text, or a reason the handler maps to a status — 'too large' is 413, anything
+// else 400.
+//
+// Strict on alphabet and padding: Buffer.from(s, 'base64') silently skips characters it
+// doesn't recognise, so without the regex a mangled payload would be stored as a
+// shorter, corrupt image instead of refused.
+const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+function sanitizeUpload(body) {
+  const { type, data } = body || {};
+  if (!UPLOAD_TYPES.has(type) || typeof data !== 'string' || !data) {
+    return { ok: false, reason: 'bad image' };
+  }
+  if (data.length > MAX_UPLOAD_B64) return { ok: false, reason: 'too large' };
+  if (data.length % 4 !== 0 || !B64_RE.test(data)) return { ok: false, reason: 'bad image' };
+  return { ok: true, mime: type, bytes: Buffer.from(data, 'base64') };
+}
+
 // A page cursor is the last row's (updated_at, nid). Both halves are needed:
 // updated_at is not unique — a push writes a whole batch in one transaction, so
 // hundreds of rows can share a timestamp — and paging on it alone would either skip
@@ -298,8 +320,8 @@ function rowToFolder(row) {
 module.exports = {
   wellFormed, sliceCodePoints,
   normalizeFolder, normalizeNid, sanitizeBlocks, sanitizeNote, sanitizeNotes,
-  sanitizeFolders, sanitizeNids, sanitizePrefs, sanitizeImage,
+  sanitizeFolders, sanitizeNids, sanitizePrefs, sanitizeImage, sanitizeUpload,
   encodeCursor, decodeCursor,
   rowToNote, rowToFolder,
-  MAX_NOTES_PER_REQUEST, MAX_BLOCK_BYTES, MAX_PREFS_BYTES, MAX_IMAGE_BYTES, FOLDER_MAX_DEPTH,
+  MAX_NOTES_PER_REQUEST, MAX_BLOCK_BYTES, MAX_PREFS_BYTES, MAX_IMAGE_BYTES, MAX_UPLOAD_B64, FOLDER_MAX_DEPTH,
 };

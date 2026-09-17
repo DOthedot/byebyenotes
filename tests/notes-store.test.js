@@ -425,3 +425,48 @@ describe('the strip fires on the key, not on its type', () => {
     expect(out.mainBg).toEqual({ wall: 'valley', scrim: 70 });
   });
 });
+
+describe('sanitizeUpload', () => {
+  const b64 = (s) => Buffer.from(s).toString('base64');
+  const BAD = { ok: false, reason: 'bad image' };
+
+  test('accepts each allowed type and returns the decoded bytes', () => {
+    for (const type of ['image/jpeg', 'image/png', 'image/webp', 'image/gif']) {
+      const out = store.sanitizeUpload({ type, data: b64('pixels') });
+      expect(out.ok).toBe(true);
+      expect(out.mime).toBe(type);
+      expect(Buffer.isBuffer(out.bytes)).toBe(true);
+      expect(out.bytes.toString()).toBe('pixels');
+    }
+  });
+
+  test('rejects a type outside the allowlist, and a missing body', () => {
+    // SVG is deliberately absent: it is an image type that can carry script.
+    expect(store.sanitizeUpload({ type: 'image/svg+xml', data: b64('<svg/>') })).toEqual(BAD);
+    expect(store.sanitizeUpload({ type: 'text/html', data: b64('<p>') })).toEqual(BAD);
+    expect(store.sanitizeUpload(undefined)).toEqual(BAD);
+  });
+
+  test('rejects data that is not a non-empty string', () => {
+    for (const data of ['', null, 42, ['AAAA']]) {
+      expect(store.sanitizeUpload({ type: 'image/png', data })).toEqual(BAD);
+    }
+  });
+
+  test('rejects malformed base64 instead of storing a truncated image', () => {
+    for (const data of ['AAA', 'AA*A', 'AAAA====', 'data:image/png;base64,AAAA']) {
+      expect(store.sanitizeUpload({ type: 'image/png', data })).toEqual(BAD);
+    }
+  });
+
+  test('accepts exactly MAX_UPLOAD_B64 characters', () => {
+    const out = store.sanitizeUpload({ type: 'image/webp', data: 'A'.repeat(store.MAX_UPLOAD_B64) });
+    expect(out.ok).toBe(true);
+    expect(out.bytes.length).toBe(store.MAX_UPLOAD_B64 / 4 * 3);
+  });
+
+  test('refuses anything larger as too large', () => {
+    expect(store.sanitizeUpload({ type: 'image/webp', data: 'A'.repeat(store.MAX_UPLOAD_B64 + 4) }))
+      .toEqual({ ok: false, reason: 'too large' });
+  });
+});
