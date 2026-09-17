@@ -51,8 +51,9 @@ whole codebase.
 5. **Runtime verification**: for any change with runtime behavior, confirm the author
    states they drove it in a real browser (tests alone are insufficient here — several
    past bugs passed jest and only showed up live). If there's no evidence, flag it.
-6. **Style & scope**: matches surrounding vanilla-JS style; no new frameworks, build
-   steps, or npm runtime deps (CDN-only); no stray `console.log`/`debugger`; changes are
+6. **Style & scope**: matches surrounding vanilla-JS style; no new frameworks or build
+   steps; browser libraries come from a CDN (server-side npm deps in `api/`/`server.js`
+   are allowed, but must be in `package.json` `dependencies`); no stray `console.log`/`debugger`; changes are
    focused and trace to the stated intent.
 
 ## Output

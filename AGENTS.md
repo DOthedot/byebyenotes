@@ -32,8 +32,11 @@ still use a Vercel KV store.
 | `assets/*.jpg` | Wallpaper images offered by the `/settings` sidebar background picker. |
 | `vercel.json` | SPA rewrite that excludes `/api/`. |
 
-CDN deps only (no npm runtime deps): highlight.js, lz-string, qrcodejs, html-docx-js.
-Don't add dependencies without a strong reason.
+Browser deps come from a CDN — there is no bundler to ship `node_modules` to the
+page: highlight.js, lz-string, qrcodejs, html-docx-js. Server code (`api/`,
+`server.js`) may add npm runtime dependencies as it needs them (`pg` for Postgres,
+a Redis client for Railway Redis); install them with `npm install --save` so
+`npm ci` in the Dockerfile picks them up.
 
 ## Core architecture (understand before changing)
 

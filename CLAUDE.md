@@ -15,7 +15,9 @@ folders and prefs (`api/sync.js`); pasted images still use a Vercel KV store. Ne
 is required to use the app.
 
 - **No build step.** Plain HTML/CSS/JS + CDN `<script>` tags. Do **not** add a
-  bundler, framework, transpiler, or npm runtime dependency.
+  bundler, framework, or transpiler. Server code (`api/`, `server.js`) may use npm
+  runtime dependencies (`pg`, a Redis client); browser code still loads its
+  libraries from a CDN, because nothing bundles `node_modules` for the page.
 - **`blocks[]` is the source of truth, not the DOM.** Each block is
   `{ id, type: 'text'|'code', lang, content }`. See `AGENTS.md → Core architecture`.
 - **One note is open at a time, even with tabs.** `blocks[]` and `location.hash` still
