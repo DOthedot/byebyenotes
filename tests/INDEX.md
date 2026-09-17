@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 31 files, **494 tests** — all green.
+- **Suite:** 31 files, **497 tests** — all green.
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -58,7 +58,7 @@ running it under jsdom would only hide that fact.
 | `buildHelpList` | `help.test.js` | Read-only `/help` reference: intro + COMMANDS (from `buildCommandList`) + SHORTCUTS + FORMATTING. |
 | `makeRecentRow` | `recents.test.js` | Build a start-screen recent-note row DOM element; asserts the move-to-folder button's icon + accessible label. |
 | `isOpenableSnapshot` | `recents.test.js` | Whether a recent snapshot can actually reopen (non-empty hash that decodes to blocks); guards save + click so a dead note never opens blank (issue #19). |
-| `buildTreeRows` | `sidebar-tree.test.js` | Flattens `bbn.recent` snapshots into the sidebar's ordered rows (folders first, each followed by its notes unless folded, then loose notes). Wraps `groupByFolder`; tolerates a missing folded Set and non-array input. |
+| `buildTreeRows` | `sidebar-tree.test.js` | Flattens `bbn.recent` snapshots into the sidebar's ordered rows (folders first, each followed by its notes unless folded, then loose notes). Folders **and notes** sort by name, so the tree cannot inherit `bbn.recent`'s most-recently-saved-first order — opening a note re-saves it, which used to reshuffle the sidebar under the reader. Wraps `groupByFolder`; tolerates a missing folded Set and non-array input. |
 | `normalizeSidebarCfg` | `sidebar-bg.test.js` | Clamps every sidebar background value and rejects unknown wallpaper ids / positions. The trust boundary for `bbn.prefs.sidebar`, which arrives from localStorage **and** from other devices via `/api/sync`. |
 | `sidebarCssVars` | `sidebar-bg.test.js` | A normalized config → the `--sb-*` custom properties the panel's `::before`/`::after` layers read. Pure string building, no DOM. |
 | `filterPaletteItems` | `palette-filter.test.js` | The palette's search predicate (label/desc/hint, case-insensitive, leading `/` ignored). Split out of `filterPalette` so `openPalette(mode, { keep: true })` can re-apply a live filter without resetting the selected row — the seam behind repeatable `/settings` ± commands. |
