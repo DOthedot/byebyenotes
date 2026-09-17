@@ -1754,3 +1754,29 @@ body.focus-mode .blk-lines { display: none; }
    empty keycap column beside it. */
 #palette-list.help-grid .help-row.help-prose { padding-left: 13px; }
 #palette-list.help-grid .help-row.help-prose .help-text { color: var(--fg); }
+
+/* ── Sync indicator ──────────────────────────────────────────────────────────
+   Persistent, because the thing it reports is persistent. A failed push used to be
+   a toast that cleared after 1.5s, and from then on a dead connection was
+   indistinguishable from a working one — the app kept taking edits and quietly kept
+   them to itself. Three states, told apart by colour rather than by reading:
+   off is quiet, on is quiet, and only "not getting through" asks for attention. */
+#status .seg.sync { cursor: default; white-space: nowrap; }
+#status .seg.sync .sync-short { display: none; }
+#status .seg.sync[data-tone="off"]  { color: var(--fg-faint); }
+#status .seg.sync[data-tone="ok"]   { color: var(--fg-dim); }
+#status .seg.sync[data-tone="warn"] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  font-weight: 500;
+}
+
+/* Narrow screens. This block must stay BELOW the base .sync rules above: a media
+   query adds no specificity, so whichever of two single-class rules comes last in the
+   file wins, and putting this higher up silently hid both spans at once. */
+@media (max-width: 700px) {
+  /* The segment itself stays, unlike its neighbours. It is the only thing in this bar
+     that reports a problem, and a phone is where a flaky connection is likeliest. */
+  #status .seg.sync .sync-full  { display: none; }
+  #status .seg.sync .sync-short { display: inline; }
+}

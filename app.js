@@ -441,7 +441,7 @@ let pushTimer    = null;
 
 // ── DOM refs (populated in DOMContentLoaded) ──────────────────────────────────
 let docContainer, statusMode, statusLang, statusFont, statusUrl, statusUrlFill,
-    statusUrlText, statusHint, statusCopied;
+    statusUrlText, statusHint, statusCopied, statusSync;
 let paletteOverlay, paletteEl, paletteSearch, paletteTitle, paletteList;
 let emptyState, recentSection, recentList, exampleLink;
 let shareOverlay, shareCard, shareLinkEl, shareQr, capFill, capText, shareTtlEl, shareFootMsg;
@@ -1146,7 +1146,13 @@ async function fetchAllPages() {
   for (; page < PULL_MAX_PAGES; page++) {
     const url = '/api/sync' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '');
     const res = await fetch(url, { headers: { 'x-sync-key': syncKey } });
-    if (!res.ok) throw new Error('pull failed');
+    if (!res.ok) {
+      // Carried on the error so callers can tell "cannot reach the server", which
+      // retrying fixes, from "this passphrase is not yours", which it never will.
+      const err = new Error('pull failed');
+      err.status = res.status;
+      throw err;
+    }
     const { data } = await res.json();
     if (!data) break;
     // Everything except `notes` describes the account, not this page, so the first
@@ -1320,6 +1326,14 @@ function saveSynced(map) {
 // one session, and costs one push of the size every push used to be.
 let didFullPush = false;
 
+// What the status indicator reports. In memory on purpose — it describes the health of
+// THIS session's connection, and a failure remembered across a reload would be stale
+// the moment the page came back.
+let syncFailing = false;
+let syncLastOkAt = null;
+let syncRetryTimer = null;
+let syncRetryDelay = 0;
+
 // Notes go up in batches. The server slices anything past MAX_NOTES_PER_REQUEST off
 // the end of a push and says nothing about it, so a single request carrying more than
 // that loses the remainder silently — the same failure the paged pull just removed on
@@ -1371,9 +1385,10 @@ async function pushNow() {
   // would ship 120KB of base64 that nobody asked for.
   if (sentImage) first.sidebarImage = sidebarImage;
 
-  const fail = (msg) => {
+  const fail = (msg, status) => {
     // Put the image back on the queue: the server never received it.
     if (sentImage) sidebarImageDirty = true;
+    markSyncFailed(status ? { status } : null);
     flashCopied(msg);
   };
 
@@ -1407,7 +1422,7 @@ async function pushNow() {
       if (!res.ok) {
         return fail(res.status === 403
           ? 'sync failed — that passphrase belongs to a different account'
-          : `sync failed (${res.status})`);
+          : `sync failed (${res.status})`, res.status);
       }
       // This batch is durable, so record what it contained — keyed to the fingerprint
       // computed when the request was BUILT, never to the note's state now. A note
@@ -1437,6 +1452,7 @@ async function pushNow() {
     newFolders:     first.folders,
   });
   didFullPush = true;
+  markSyncOk();
 
   // Drop entries for notes this device no longer has, so the store cannot grow
   // without bound as notes come and go.
@@ -1449,10 +1465,126 @@ async function pushNow() {
   if (pruned) saveSynced(current);
 }
 
+// Paints the indicator. Reads state rather than being told what to say, so every
+// caller is a plain "something changed" and none of them can disagree about what the
+// current state is.
+function renderSyncStatus() {
+  if (!statusSync) return;
+  // Counted only when it will be shown. countUnsynced decodes and fingerprints every
+  // note, and syncState reads `pending` only in the failing branch — so computing it
+  // unconditionally paid for a full store decode on every healthy keystroke pause and
+  // threw the answer away.
+  const st = syncState({
+    hasKey: !!syncKey,
+    pending: syncFailing ? countUnsynced() : 0,
+    failing: syncFailing,
+    lastOkAt: syncLastOkAt,
+    now: Date.now(),
+  });
+  statusSync.innerHTML =
+    `<span class="sync-full">${escapeHtml(st.label)}</span>` +
+    `<span class="sync-short">${escapeHtml(st.short)}</span>`;
+  statusSync.title = st.title;
+  statusSync.dataset.tone = st.tone;
+}
+
+// How many notes this device is holding that the server has not accepted.
+//
+// Free, because dirty tracking already keeps the answer: bbn.synced maps each note to
+// the fingerprint the server last took, and anything whose fingerprint differs is by
+// definition unsent. No counter to maintain, and it cannot drift from the truth the
+// way a tally incremented at edit sites would.
+function countUnsynced() {
+  if (!syncKey) return 0;
+  const synced = loadSynced();
+  let n = 0;
+  loadSnapshots().forEach(snap => {
+    const wire = snapshotToWireNote(snap);
+    if (wire && synced[wire.nid] !== noteFingerprint(wire)) n++;
+  });
+  return n;
+}
+
+// How long ago, in words. A status bar has no room for a timestamp, and "3h ago"
+// answers the only question being asked: is this stale enough to worry about.
+function agoLabel(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  return Math.floor(h / 24) + 'd ago';
+}
+
+// What the status bar should say about sync. Pure, so the three states can be tested
+// without a server: off, on and current, and on but not getting through.
+//
+// The third state is the reason this exists. A failed push used to be a toast that
+// vanished in 1.5 seconds, after which a dead connection looked exactly like a working
+// one — the app went on accepting edits and quietly kept them to itself.
+//
+// Pending notes ALONE are not a warning. PUSH_DELAY leaves every edit unsent for two
+// seconds by design, so flagging that would make the indicator cry wolf on every
+// keystroke. Only a push that actually failed turns it amber.
+function syncState({ hasKey, pending, failing, lastOkAt, now }) {
+  if (!hasKey) {
+    return { tone: 'off', label: 'sync off', short: 'off',
+             title: 'notes stay on this device · /sync with a passphrase to change that' };
+  }
+  if (failing) {
+    const n = pending || 0;
+    const ago = Number.isFinite(lastOkAt) && lastOkAt !== null ? agoLabel(now - lastOkAt) : null;
+    return {
+      tone: 'warn',
+      label: n ? `sync ⚠ ${n} unsent` : 'sync ⚠',
+      // Narrow screens keep the warning and drop the detail. The bar hides its other
+      // segments at that width; hiding this one would defeat the point of it being
+      // persistent, and the count is the part you can do without.
+      short: n ? `⚠ ${n}` : '⚠',
+      title: 'cannot reach the server — retrying' +
+             (n ? `; ${n} note${n === 1 ? '' : 's'} waiting` : '') +
+             (ago ? ` · last synced ${ago}` : ' · never synced on this device'),
+    };
+  }
+  return { tone: 'ok', label: 'sync on', short: 'on', title: 'synced' + (Number.isFinite(lastOkAt) && lastOkAt !== null ? ' · ' + agoLabel(now - lastOkAt) : '') };
+}
+
 function schedulePush() {
   if (!syncKey) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(pushNow, PUSH_DELAY);
+}
+
+// A failed push used to be the end of it: a toast, and nothing tried again until the
+// next edit or a reload. Go offline, type, stop typing, and the work sat here
+// indefinitely while the app looked untroubled. Backed off so a long outage does not
+// mean a request every two seconds, and capped so recovery is noticed within a minute.
+const SYNC_RETRY_MIN = 5000;
+const SYNC_RETRY_MAX = 60000;
+
+function scheduleRetry() {
+  if (!syncKey) return;
+  clearTimeout(syncRetryTimer);
+  syncRetryDelay = syncRetryDelay ? Math.min(syncRetryDelay * 2, SYNC_RETRY_MAX) : SYNC_RETRY_MIN;
+  syncRetryTimer = setTimeout(pushNow, syncRetryDelay);
+}
+
+function markSyncOk() {
+  syncFailing = false;
+  syncLastOkAt = Date.now();
+  syncRetryDelay = 0;
+  clearTimeout(syncRetryTimer);
+  renderSyncStatus();
+}
+
+// `err` is optional: a 403 means the passphrase belongs to a different account, which
+// no amount of retrying resolves, so it reports without arming the timer. Anything
+// else is treated as reachable-later.
+function markSyncFailed(err) {
+  syncFailing = true;
+  if (!(err && err.status === 403)) scheduleRetry();
+  renderSyncStatus();
 }
 
 async function enableSync(phrase) {
@@ -1471,6 +1603,7 @@ async function enableSync(phrase) {
     loadFolders().forEach(f => addPending('newFolders', f));
     schedulePush();
     flashCopied('sync on ✓');
+    markSyncOk();
     // Handed back so a caller that resumes into an export knows whether this pull
     // actually got everything. Discarding it meant the "enable sync, then export"
     // path skipped the truncation check that the ordinary export path performs.
@@ -1479,6 +1612,11 @@ async function enableSync(phrase) {
     syncKey = null;
     try { localStorage.removeItem(SYNC_KEY_LS); } catch (err) {}
     flashCopied('sync failed — server not reachable');
+    // No renderSyncStatus here, and that is only safe because this is reachable just
+    // from the passphrase prompt, which opens when syncKey is already null — the
+    // indicator has been reading "off" throughout. Add one here the moment there is a
+    // way to re-enter a passphrase while sync is already on, or a failed reconnect
+    // will leave the bar claiming a connection that just died.
     return { truncated: false };
   }
 }
@@ -1492,6 +1630,11 @@ function disableSync() {
   // keeping the store would mark every one of them as already synced and push nothing.
   try { localStorage.removeItem(SYNCED_KEY); } catch (e) {}
   didFullPush = false;
+  syncFailing = false;
+  syncLastOkAt = null;
+  syncRetryDelay = 0;
+  clearTimeout(syncRetryTimer);
+  renderSyncStatus();
   flashCopied('sync off — this device keeps its local copy');
 }
 
@@ -2655,7 +2798,7 @@ function hasContent() {
 
 function scheduleSync() {
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(syncNow, SYNC_DELAY);
+  syncTimer = setTimeout(() => { syncNow(); renderSyncStatus(); }, SYNC_DELAY);
 }
 
 function syncNow() {
@@ -4026,7 +4169,14 @@ async function exportAll(opts) {
     try {
       flashCopied('fetching your synced notes…');
       pulled = await syncPull();
+      // This pull is evidence about the connection like any other, so it updates the
+      // indicator. Without this, a server proven unreachable DURING an export left
+      // the status bar still claiming sync was fine — the precise staleness the
+      // indicator exists to prevent, arriving through the one pull that did not
+      // report its outcome.
+      markSyncOk();
     } catch (e) {
+      markSyncFailed(e);
       return openPalette('exportAllOffline');
     }
     // A pull that stopped early is not a failure, so it lands here rather than in the
@@ -5168,6 +5318,7 @@ document.addEventListener('DOMContentLoaded', () => {
   statusUrlText  = document.getElementById('status-url-text');
   statusHint     = document.getElementById('status-hint');
   statusCopied   = document.getElementById('status-copied');
+  statusSync     = document.getElementById('status-sync');
   paletteOverlay = document.getElementById('palette-overlay');
   paletteEl      = document.getElementById('palette');
   paletteSearch  = document.getElementById('palette-search');
@@ -5230,7 +5381,10 @@ document.addEventListener('DOMContentLoaded', () => {
   applyTextCfg(loadTextCfg());
   applyAllSurfaceBg();
 
-  if (syncKey) syncPull().catch(() => {});
+  renderSyncStatus();
+  // The indicator must be right before the first pull answers, not only after — a
+  // slow network would otherwise leave it blank for as long as the request takes.
+  if (syncKey) syncPull().then(markSyncOk).catch(markSyncFailed);
 });
 
 // ── Tiny-link resolution (boot) ───────────────────────────────────────────────
@@ -5301,7 +5455,7 @@ if (typeof module !== 'undefined') {
     parseTinyId, tinyExpiryLabel, TINY_EXPIRY,
     normalizeSidebarCfg, sidebarCssVars, WALLPAPERS, SIDEBAR_DEFAULTS, SIDEBAR_LOOK_DEFAULTS, SIDEBAR_STEPS,
     normalizeSurfaceBg, SURFACE_BG_DEFAULTS, customFingerprint, wallpapersFor, buildSyncPrefs,
-    PUSH_BATCH, chunk, cheapHash, noteFingerprint, isQuotaError,
+    PUSH_BATCH, chunk, cheapHash, noteFingerprint, isQuotaError, syncState, agoLabel,
     normalizeTextCfg, TEXT_DEFAULTS, TEXT_RANGES,
     filterPaletteItems,
     snapshotToWireNote, wireNoteToSnapshot, newNid, blocksToMarkdown, markdownToBlocks, parseImportFiles, takeManifest, safeFileName, safePathSegments, buildExportTree, loadScriptOnce, __resetScriptCache,
