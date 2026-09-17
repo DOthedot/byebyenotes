@@ -273,26 +273,38 @@ resolution) is browser-verified, not here.
 | `TINY_EXPIRY` lists 24hr first, four options | `[0].ttl === 86400`; ttls are exactly `{60,1800,21600,86400}`. | Default is 24hr; the select + api share this option set. |
 | `tinyExpiryLabel` maps ttl → label, falls back to 24hr | `1800→'30min'`, `86400→'24hr'`, unknown→`'24hr'`. | Footer text ("expires in …") stays correct. |
 
-## `api-tiny.test.js` — the `api/tiny.js` serverless handler (8 tests)
+## `api-tiny.test.js` — the `api/tiny.js` handler (13 tests)
 
-The only test that drives a **serverless handler** directly (the others test `app.js`
-exports). It `require`s `api/tiny.js` with a mocked `(req, res)` and a mocked KV REST
-endpoint (`global.fetch`); env is set per-case so the handler's load-time KV detection is
-exercised. Mirrors the fail-soft contract in [`../api/README.md`](../api/README.md).
+`@jest-environment node`. Drives the exported handler with a mocked `(req, res)` and
+`jest.mock('../api/redis')`, so the handler's contract — validation, collision-safe id
+allocation, fail-soft statuses — is tested without a live Redis. `api/ids.js` is real.
+Mirrors [`../api/README.md`](../api/README.md).
 
 | Test | Asserts |
 |------|---------|
-| 503 when KV not configured | No KV env → `503`. |
+| 503 when Redis is not configured | `isConfigured()` false → `503 tiny url not configured`, nothing written. |
 | POST rejects a ttl not in the allowed set | `ttl` outside `{60,1800,21600,86400}` → `400`. |
-| POST stores the hash with a Redis TTL and returns an id | `200 {id}` (id matches `/^[a-z0-9]{6,12}$/`) and the kv command is `['SET','tiny:<id>',hash,'EX',ttl]`. |
-| POST rejects an oversized hash | hash > 200000 chars → `413`. |
-| GET unknown id returns 404 | kv returns null → `404`. |
-| GET known id returns the stored hash | kv returns the value → `200 {hash}`. |
-| GET bad id returns 400 | id failing `/^[a-z0-9]{6,12}$/` → `400`. |
-| unsupported method returns 405 | `DELETE` → `405`. |
+| POST rejects a missing hash | No `hash` → `400`. |
+| POST rejects an oversized hash | > 200000 chars → `413`, nothing written. |
+| POST stores the hash under tiny:<id> with its ttl | `200 {id, ttl}`, id matches `/^[a-z0-9]{6,12}$/`, `setIfAbsent('tiny:<id>', hash, ttl)`. |
+| POST retries with a fresh id when the first is taken | `false` then `true` → two different keys; the second is returned. |
+| POST gives up with 502 after three collisions | Exactly 3 attempts. |
+| POST returns 502 when Redis throws | `redis unavailable` — the share panel's cue to fall back to the full-hash link. |
+| GET bad id returns 400 | Fails `/^[a-z0-9]{6,12}$/`; Redis not called. |
+| GET unknown id returns 404 | `get('tiny:<id>')` → `null`. |
+| GET known id returns the stored hash, uncached | `200 {hash}`, `Cache-Control: no-store`. |
+| GET returns 502 when Redis throws | Same fallback as POST. |
+| unsupported method returns 405 | `Allow: GET, POST`. |
 
-> **Note:** this suite adds handler coverage, but the true end-to-end path (real KV,
-> `/s/<id>` rewrite) is only exercised on the deployed site — see `AGENTS.md → Gotchas`.
+> **Note:** the true end-to-end path (real Redis, `/s/<id>` rewrite) is only exercised on
+> the deployed site — see `AGENTS.md → Gotchas`.
+
+## `ids.test.js` — `api/ids.js` (2 tests)
+
+| Test | Asserts |
+|------|---------|
+| randomId returns exactly the requested length from [a-z0-9] | Lengths 6, 8, 12, 16. |
+| randomId does not repeat across many calls | 1000 ids of length 8 are all distinct. |
 
 ## `api-redis.test.js` — the Redis connection owner (8 tests)
 
