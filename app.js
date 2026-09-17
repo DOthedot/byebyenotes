@@ -899,6 +899,24 @@ function buildTreeRows(snaps, folded, extraFolders) {
   const deepCount = (node) =>
     node.notes.length + [...node.children.values()].reduce((n, c) => n + deepCount(c), 0);
 
+  // Notes sort by name, exactly as the folder rows below already do.
+  //
+  // `snaps` arrives in bbn.recent's order, which is most-recently-SAVED-first — and
+  // merely opening a note re-saves it (syncNow → saveSnapshot, which unshifts). So
+  // rendering the store's order meant the tree reshuffled under the reader every time
+  // they clicked something, with half the tree (folders) stable and half not.
+  //
+  // The key is derived exactly as fileLabel derives the visible name, markup stripped
+  // and all: a legacy or synced snapshot can still hold a raw title like
+  // "==red:# there are things==", and sorting on that would file the note under `=`
+  // — a character the reader cannot see. The 'untitled' fallback matches too, so an
+  // untitled note sorts where it is shown rather than at the front.
+  //
+  // The home screen keeps the recency order: "recent" is what that list is for, while
+  // the sidebar is a file tree.
+  const sortName = (s) => ((stripTitleMarkup(s.title) || 'untitled').trim() || 'untitled');
+  const byTitle = (a, b) => sortName(a).localeCompare(sortName(b));
+
   const rows = [];
   const walk = (node, prefix, depth) => {
     [...node.children.keys()].sort((a, b) => a.localeCompare(b)).forEach(name => {
@@ -907,12 +925,12 @@ function buildTreeRows(snaps, folded, extraFolders) {
       const collapsed = isFolded(path);
       rows.push({ kind: 'folder', name, path, count: deepCount(child), folded: collapsed, depth });
       if (collapsed) return;                       // hides the entire subtree
-      child.notes.forEach(s => rows.push(note(s, path, depth + 1)));
+      child.notes.sort(byTitle).forEach(s => rows.push(note(s, path, depth + 1)));
       walk(child, path, depth + 1);
     });
   };
   walk(root, '', 0);
-  loose.forEach(s => rows.push(note(s, null, 0)));
+  loose.sort(byTitle).forEach(s => rows.push(note(s, null, 0)));
   return rows;
 }
 
