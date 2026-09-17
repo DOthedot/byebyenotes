@@ -11,8 +11,8 @@ No accounts, no notes database. State is compressed with LZ-String into
 `location.hash`. Signed out, the app is 100% functional with **zero backend**.
 
 Turn on `/sync` and a **Postgres** database becomes the source of truth for your notes,
-folders and prefs (`api/sync.js`); pasted images still use a Vercel KV store. Neither
-is required to use the app.
+folders and prefs (`api/sync.js`) and for pasted images (`api/img.js`); short share
+links live in Railway **Redis** (`api/tiny.js`). Neither is required to use the app.
 
 - **No build step.** Plain HTML/CSS/JS + CDN `<script>` tags. Do **not** add a
   bundler, framework, or transpiler. Server code (`api/`, `server.js`) may use npm
@@ -38,7 +38,7 @@ is required to use the app.
 | `index.html` | Static DOM shell (empty-state, app shell + sidebar + tabline, status bar, palette, share panel, FAB) and the inline pre-paint script that restores the sidebar's open/closed state. | — |
 | `app.js` | **All** app logic (~3100 lines, one file on purpose). | `AGENTS.md` |
 | `style.css` | All styles + the 13 theme variable blocks. | — |
-| `api/` | Server endpoints — `sync.js` (Postgres), `db.js`, `auth.js`, `notes-store.js`, `img.js` (KV). | [`api/README.md`](./api/README.md) |
+| `api/` | Server endpoints — `sync.js` + `img.js` (Postgres), `tiny.js` (Redis), `db.js`, `redis.js`, `auth.js`, `ids.js`, `notes-store.js`. | [`api/README.md`](./api/README.md) |
 | `migrations/` | Postgres schema, applied in filename order by `npm run migrate`. | — |
 | `server.js` | Node front door for Railway/VPS. **Owns `/api/sync`** — Vercel has no route to the database. | — |
 | `tests/` | Jest (jsdom) unit tests for the **pure** functions. | [`tests/INDEX.md`](./tests/INDEX.md) |

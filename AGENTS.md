@@ -9,8 +9,8 @@ No accounts, no database for notes. State is compressed with LZ-String into
 `location.hash`. Signed out, the app is fully functional with zero backend.
 
 With `/sync` on, **Postgres is the source of truth** for notes, folders and prefs —
-the hash becomes a share/export serialization rather than storage. Pasted images
-still use a Vercel KV store.
+the hash becomes a share/export serialization rather than storage. Pasted images are
+Postgres rows too (`images`), and short share links live in Railway Redis.
 
 - **No build step.** Plain HTML/CSS/JS. Do not add a bundler, framework, or transpiler.
 - **Deploy = push to `main`.** Vercel auto-deploys to `byebyenotes.vercel.app`
@@ -27,7 +27,11 @@ still use a Vercel KV store.
 | `api/db.js` | The `pg` pool. Prefers `DATABASE_URL` (Railway-internal) over `DATABASE_PUBLIC_URL`. |
 | `api/auth.js` | sync key → `users.id`. HMAC lookup + scrypt verifier, cached 10 min. |
 | `api/notes-store.js` | Pure: the untrusted-payload boundary. Everything testable about sync lives here. |
-| `api/img.js` | Serverless fn: store/serve pasted images (client compresses first). |
+| `api/img.js` | Pasted images as Postgres `bytea` rows (client compresses first). Upload needs a sync key and fits a 50 MB quota; GET is public. |
+| `api/tiny.js` | Short share links in Redis — `SET … EX … NX`, collision-retried. |
+| `api/redis.js` | The Redis client from `REDIS_URL`. Fail-fast: no offline queue, ≤ 1 s wait for a connection. |
+| `api/ids.js` | `randomId(length)` — `crypto`-random `[a-z0-9]` ids for links and images. |
+| `migrations/` | Postgres schema, applied in filename order by `npm run migrate` — never on boot. |
 | `tests/*.test.js` | Jest (jsdom) unit tests for the **pure** functions. |
 | `assets/*.jpg` | Wallpaper images offered by the `/settings` sidebar background picker. |
 | `vercel.json` | SPA rewrite that excludes `/api/`. |
@@ -112,7 +116,7 @@ Definition of done for a change:
    of `app.js` under the `typeof module !== 'undefined'` guard).
 2. **Drive the real app in a browser** for anything with runtime behavior — don't rely
    on tests alone. Reproduce the bug first, then confirm the fix.
-3. For `/api` / KV changes, round-trip against production with `curl` after deploy.
+3. For `/api` changes, round-trip against production with `curl` after deploy.
 4. Match existing code style. Keep logic in `app.js`; keep it a single file.
 
 ## Pre-commit review (enforced by a hook)

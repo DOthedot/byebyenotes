@@ -3,7 +3,7 @@
 The complete map of the unit-test suite: **what is tested, where, and exactly what
 each case asserts (and why)**. If you add or change a test, update this file too.
 
-- **Suite:** 23 files, **202 tests** — all green.
+- **Suite:** 31 files, **494 tests** — all green.
 - **Runner:** [Jest](https://jestjs.io/) 29, `testEnvironment: jsdom` (configured in
   `package.json`).
 - **Run everything:** `npx jest` (or `npm test`). Run one file: `npx jest markdown`.
@@ -22,9 +22,10 @@ Every test file re-establishes the same two browser globals that jsdom lacks, be
 | `LZString` | `compressToEncodedURIComponent = btoa`, `decompress… = atob` (null on throw) | Real LZ-String isn't loaded in jsdom; base64 is a good-enough reversible stand-in so `encodeState`/`decodeState` can round-trip. |
 | `hljs` | `highlight: (text) => ({ value: text })` | highlight.js is a CDN dep; the stub returns text unchanged so `buildBlockEl` for code blocks doesn't crash. Only `blocks.test.js` needs it. |
 
-**Exception:** `notes-store.test.js` tests `api/`, not `app.js`. It declares
-`@jest-environment node` in a docblock and needs neither stub — server code has no
-browser globals to fake, and running it under jsdom would only hide that fact.
+**Exception:** the `api/` suites — `notes-store`, `api-tiny`, `api-img`, `api-redis`,
+`ids` — test server code, not `app.js`. Each declares `@jest-environment node` in a
+docblock and needs neither stub — server code has no browser globals to fake, and
+running it under jsdom would only hide that fact.
 
 > **Adding a pure function?** Export it in the `module.exports` block at the bottom of
 > `app.js`, then add a case to the most relevant file below (or a new `*.test.js`).
@@ -66,10 +67,14 @@ browser globals to fake, and running it under jsdom would only hide that fact.
 | `caretScrollDelta` | `scroll-caret.test.js` | Pixels to scroll `#document-container` so the caret stays visible with a margin (positive = down, negative = up, 0 = fine). The seam behind `scrollCaretIntoView`, which keeps Enter from dropping the caret below the fold (issue #26). |
 | `parseTinyId` | `tiny.test.js` | `/s/<id>` path → validated tiny id, or `null`. |
 | `tinyExpiryLabel`, `TINY_EXPIRY` | `tiny.test.js` | Expiry-option list (24hr first) + ttl→label with 24hr fallback. |
-| `api/tiny.js` handler | `api-tiny.test.js` | The serverless handler itself (not an `app.js` export) — see its section below. |
+| `api/tiny.js` handler | `api-tiny.test.js` | The short-link handler itself (not an `app.js` export) — see its section below. |
+| `api/img.js` handler | `api-img.test.js` | Pasted images in Postgres — authenticated upload, quota, public GET. |
+| `api/redis.js` | `api-redis.test.js` | The Redis client owner — its fail-fast contract. |
+| `api/ids.js` `randomId` | `ids.test.js` | `crypto`-random `[a-z0-9]` ids. |
+| `imageUploadMessage` | `image-upload.test.js` | Failed-paste status + server error text → the toast shown. |
 
 Not yet unit-tested (browser/integration territory): palette/keyboard handling,
-`syncNow`/URL persistence, image paste + `/api/img`, sync round-trip + `/api/sync`,
+`syncNow`/URL persistence, the image paste DOM flow, sync round-trip + `/api/sync`,
 theme/font application, focus mode, export. (The DOM wiring of Home-screen keyboard
 nav — row collection, `.kb-active`, Enter dispatch — is browser-verified; only its
 pure index math `nextNavIndex` is unit-tested here.)

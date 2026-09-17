@@ -9,8 +9,8 @@ They are split across two backing stores, which is the thing to know before edit
 | Handler | Store | Configured by |
 |---|---|---|
 | `sync.js` | **Postgres** (`users`, `notes`, `folders`, `user_prefs`) | `DATABASE_URL`, `SYNC_PEPPER` |
-| `img.js` | Vercel KV / Upstash Redis | `KV_REST_API_URL`, `KV_REST_API_TOKEN` |
-| `tiny.js` | Vercel KV / Upstash Redis | same as above |
+| `img.js` | **Postgres** (`images`) | `DATABASE_URL`; uploads also need `SYNC_PEPPER` |
+| `tiny.js` | **Redis** (Railway), via `redis.js` | `REDIS_URL` |
 
 Each file is a single `module.exports = async (req, res) => {…}` handler (Vercel's Node
 function signature). `server.js` reproduces that signature — `req.query`, `req.body`,
@@ -108,17 +108,41 @@ Schema: [`../migrations/`](../migrations/), applied with `npm run migrate`.
 
 ## `img.js` — pasted-image store
 
-Still on KV; not migrated. Notes live in the URL and image bytes can't fit there, so
-pasted/dropped images are **compressed client-side**, uploaded here, and referenced by
-a short id. The markdown only ever stores the `/api/img?id=…` URL, never the bytes.
+Postgres table `images` ([`../migrations/003_images.sql`](../migrations/003_images.sql)).
+Notes live in the URL and image bytes can't fit there, so pasted/dropped images are
+**compressed client-side**, uploaded here, and referenced by a short id. The markdown
+only ever stores the `/api/img?id=…` URL, never the bytes.
+
+**Uploading needs a sync key; viewing does not.** An upload writes to the database that
+holds everyone's notes, so it has to belong to an account: that is what the quota counts
+and what `ON DELETE CASCADE` cleans up. Viewing stays public so a shared note renders
+for someone who never signed in.
 
 | | |
 |---|---|
-| **`POST`** | Body `{ type, data }`. `type` ∈ `{image/jpeg, png, webp, gif}`; `data` = base64 string ≤ `MAX_B64` (500 000, ~375 KB) → else `400`/`413`. Stores `img:<id>` and returns `{ id }` (random 10-char base36). |
-| **`GET`** | `?id=` must match `/^[a-z0-9]{8,16}$/` → else `400`. Returns the raw bytes with the stored `Content-Type` and `Cache-Control: public, max-age=31536000, immutable`; `404` if unknown. |
+| **`POST`** | Header `x-sync-key`, resolved by `auth.js` (its `400`/`403`/`503` pass through). Body `{ type, data }`: `type` ∈ `{image/jpeg, png, webp, gif}`, `data` = bare base64 ≤ 500 000 chars (~375 KB), checked by `notes-store.js` `sanitizeUpload` → `400 bad image` / `413 too large`. Stored as `bytea`; returns `{ id }` (12 chars `[a-z0-9]` from `ids.js`). |
+| **Quota** | 50 MB per user, enforced inside the `INSERT` → `413 quota exceeded`. Concurrent uploads can overshoot by the images in flight. |
+| **`GET`** | `?id=` must match `/^[a-z0-9]{8,16}$/` → else `400`. Returns the raw bytes with the stored `Content-Type`, `Cache-Control: public, max-age=31536000, immutable` and `X-Content-Type-Options: nosniff`; `404` if unknown — including every image uploaded before the KV store was removed. |
 | **Other methods** | `405` with `Allow: GET, POST`. |
-| **No KV configured** | `503` `image store not configured`. |
-| **KV error** | `502` `kv unavailable`. |
+| **No database configured** | `GET` → `503 image store not configured`. |
+| **Database error** | `502 database unavailable`. |
+
+---
+
+## `tiny.js` — short share links
+
+Railway Redis, through `redis.js`. The client POSTs a note's LZ hash with a ttl and gets
+a short id; `/s/<id>` resolves it. Every key is written with `EX`, so links expire on
+their own — which is why this Redis can run `maxmemory-policy allkeys-lru`: it holds
+nothing that isn't already temporary.
+
+| | |
+|---|---|
+| **`POST`** | Body `{ hash, ttl }`. `ttl` ∈ `{60, 1800, 21600, 86400}`, `hash` a non-empty string ≤ 200 000 → else `400` / `413`. `SET tiny:<id> <hash> EX <ttl> NX` with an 8-char id from `ids.js`; a taken id is retried up to 3 times, then `502`. Returns `{ id, ttl }`. |
+| **`GET`** | `?id=` must match `/^[a-z0-9]{6,12}$/` → else `400`; unknown or expired → `404`; else `{ hash }` with `Cache-Control: no-store`. |
+| **Other methods** | `405` with `Allow: GET, POST`. |
+| **No `REDIS_URL`** | `503 tiny url not configured` — the share panel falls back to the full-hash link. |
+| **Redis down, or not ready within 1 s** | `502 redis unavailable` — same fallback. `redis.js` disables the offline queue, so a request never hangs on a dead Redis. |
 
 ---
 

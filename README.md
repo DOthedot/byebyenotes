@@ -141,9 +141,9 @@ docker build -t byebyenotes .
 docker run -p 3000:3000 byebyenotes          # → http://localhost:3000
 ```
 
-Or without Docker: `npm ci --omit=dev && node server.js` (Node 18+, since `api/*.js`
-use global `fetch`). `pg` is the only runtime dependency — there is still no build step,
-no bundler and no client-side package.
+Or without Docker: `npm ci --omit=dev && node server.js` (Node 20+, the floor of the
+`redis` client). `pg` and `redis` are the runtime dependencies, both server-side — there
+is still no build step, no bundler and no client-side package.
 
 **On Railway:** point it at the repo — `railway.json` selects the Dockerfile and sets
 `/healthz` as the health check. Railway injects `PORT`; the server reads it.
@@ -153,12 +153,14 @@ no bundler and no client-side package.
 | Feature | Needs | Without it |
 |---|---|---|
 | `/sync` | `DATABASE_URL` + `SYNC_PEPPER` | 503; the app stays local-only |
-| Pasted images, tiny links | `KV_REST_API_URL` + `KV_REST_API_TOKEN` | 503; paste falls back to no upload |
+| Pasted images | `DATABASE_URL` + `SYNC_PEPPER`, and `/sync` on in the browser | 503; signed out, paste explains that images need `/sync` |
+| Tiny links | `REDIS_URL` | 503; sharing falls back to the full-hash link |
 
-`api/img.js` and `api/tiny.js` speak the **Upstash REST API**, not the Redis wire
-protocol — so Railway's own Redis plugin will *not* work for those; use
-[Upstash](https://upstash.com). `api/sync.js` uses ordinary Postgres and *does* work
-with Railway's Postgres plugin.
+Both stores are Railway plugins on the private network. Set `REDIS_URL` on the app
+service as the reference variable `${{Redis.REDIS_URL}}`, and start the Redis service
+with `--maxmemory 64mb --maxmemory-policy allkeys-lru`: it holds only expiring links, so
+evicting one early is harmless. Images need `migrations/003_images.sql` applied
+(`npm run migrate`) before the code that uses them deploys.
 
 `GET /healthz` reports which of the two is configured, without querying either — a
 health check that pings the database turns a ten-second blip into a restart loop.
